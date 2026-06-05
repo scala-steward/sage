@@ -1,0 +1,3 @@
+# One client type; topology is configuration
+
+There is a single `SageClient` type; standalone vs cluster is decided by configuration, not by distinct client types (rejected: lettuce-style `RedisClient`/`RedisClusterClient` split, which infects application code with deployment topology). In cluster mode, Pipelines that cross slots are transparently split per node, run in parallel, and merged in submission order — Pipelines never promised atomicity. Transactions fail fast with a cross-slot error, since `MULTI`/`EXEC` is genuinely single-node. Cluster-only operations (per-node commands, scan-all-nodes) live in a clearly marked sub-API.
