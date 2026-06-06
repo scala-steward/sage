@@ -3,8 +3,9 @@ package sage.protocol
 import sage.Bytes
 
 /**
-  * A single RESP3 protocol value. Aggregates preserve wire order and duplicate keys; byte-carrying cases define content equality, so `==`
-  * is structural on every Frame. A sealed trait rather than an enum because those cases must override `equals`/`hashCode`.
+  * A single RESP3 protocol value. Aggregates preserve wire order and duplicate keys; byte-carrying cases define content equality and
+  * `Double` treats NaNs as equal, so `==` is structural on every Frame. A sealed trait rather than an enum because those cases must
+  * override `equals`/`hashCode`.
   */
 sealed trait Frame
 
@@ -35,7 +36,17 @@ object Frame {
 
   final case class Bool(value: Boolean) extends Frame
 
-  final case class Double(value: scala.Double) extends Frame
+  final case class Double(value: scala.Double) extends Frame {
+
+    // NaN == NaN so parsed `,nan` frames compare structurally; 0.0 == -0.0 is kept, so -0.0 must hash as +0.0.
+    override def equals(that: Any): Boolean =
+      that match {
+        case Double(other) => value == other || (value.isNaN && other.isNaN)
+        case _             => false
+      }
+
+    override def hashCode(): Int = java.lang.Double.hashCode(value + 0.0)
+  }
 
   final case class BigNumber(value: BigInt) extends Frame
 

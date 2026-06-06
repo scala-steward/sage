@@ -104,6 +104,27 @@ class CommandSpec extends munit.FunSuite {
     assertEquals(Reply.run(Connection.hello(), reply), Right(HelloReply("redis", "7.4.0", 3, "master")))
   }
 
+  test("HELLO rejects a proto other than 3, including values beyond Int range") {
+    def reply(proto: Long) = Frame.Map(
+      Vector(
+        Frame.BulkString(Bytes.utf8("server"))  -> Frame.BulkString(Bytes.utf8("redis")),
+        Frame.BulkString(Bytes.utf8("version")) -> Frame.BulkString(Bytes.utf8("7.4.0")),
+        Frame.BulkString(Bytes.utf8("proto"))   -> Frame.Integer(proto),
+        Frame.BulkString(Bytes.utf8("role"))    -> Frame.BulkString(Bytes.utf8("master"))
+      )
+    )
+    Reply.run(Connection.hello(), reply(2)) match {
+      case Left(error: SageException.DecodeError) =>
+        assertEquals(error.expected, "proto 3")
+        assertEquals(error.actual, "proto 2")
+      case other                                  => fail(s"expected a DecodeError, got $other")
+    }
+    Reply.run(Connection.hello(), reply(2147483648L)) match {
+      case Left(error: SageException.DecodeError) => assertEquals(error.actual, "proto 2147483648")
+      case other                                  => fail(s"expected a DecodeError, got $other")
+    }
+  }
+
   test("HELLO reports a missing required field") {
     val reply = Frame.Map(Vector(Frame.BulkString(Bytes.utf8("server")) -> Frame.BulkString(Bytes.utf8("redis"))))
     Reply.run(Connection.hello(), reply) match {

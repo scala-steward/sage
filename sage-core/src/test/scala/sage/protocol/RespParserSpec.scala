@@ -60,10 +60,15 @@ class RespParserSpec extends munit.FunSuite {
   }
 
   test("parses nan as a NaN double") {
-    parseOne(",nan\r\n") match {
-      case Frame.Double(value) => assert(value.isNaN)
-      case other               => fail(s"expected a double, got $other")
-    }
+    assertEquals(parseOne(",nan\r\n"), Frame.Double(Double.NaN))
+  }
+
+  test("Frame.Double equality treats NaNs as equal and keeps 0.0 == -0.0, with matching hashes") {
+    assertEquals(Frame.Double(Double.NaN), Frame.Double(Double.NaN))
+    assertEquals(Frame.Double(Double.NaN).hashCode, Frame.Double(Double.NaN).hashCode)
+    assertEquals(Frame.Double(0.0), Frame.Double(-0.0))
+    assertEquals(Frame.Double(0.0).hashCode, Frame.Double(-0.0).hashCode)
+    assertNotEquals(Frame.Double(1.0), Frame.Double(2.0))
   }
 
   test("RESP2-compat null forms parse as Null") {
@@ -230,11 +235,11 @@ class RespParserSpec extends munit.FunSuite {
     Bytes.fromArray(array)
   }
 
-  // no NaN: it breaks equality, and the parser's nan handling is covered by a dedicated test
   private def genDouble(rnd: Random): Double =
     rnd.nextInt(10) match {
       case 0 => Double.PositiveInfinity
       case 1 => Double.NegativeInfinity
+      case 2 => Double.NaN
       case _ => rnd.nextDouble() * rnd.nextLong()
     }
 }
