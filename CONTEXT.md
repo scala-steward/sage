@@ -43,6 +43,14 @@ _Avoid_: exclusive connection, pooled connection
 The lazily-created connection (one per client) that carries all pub/sub subscription state and push frames, isolating slow consumers from the Multiplexed Connection.
 _Avoid_: pub/sub connection
 
+**Watchdog**:
+The per-connection health check that probes an otherwise-idle Multiplexed Connection and declares it dead — to be reconnected — when replies stop arriving, catching half-open connections a blocking socket read never surfaces.
+_Avoid_: heartbeat, health checker, keepalive
+
+**Poisoning**:
+Marking a connection (or the parser) unusable so it is discarded and reconnected rather than reused, because continuing would be unsafe: after a protocol error (RESP3 has no resync point) or a `READONLY` reply from a demoted master.
+_Avoid_: invalidate
+
 **Cached Read**:
 A read command executed with explicit per-call opt-in to client-side caching: served from the local cache until a server invalidation push or TTL evicts it.
 _Avoid_: tracked read, local read
