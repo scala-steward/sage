@@ -86,6 +86,30 @@ _Avoid_: coverage report, gap test
 A typeclass converting one user type to/from its wire bytes at a command boundary. A boundary converter, not a serialization framework; keys and values have separate codec typeclasses (keys must also be hashable to cluster slots). Built-in codecs decode strictly: bytes that are not the type's canonical wire form fail with a decode error rather than being coerced. The RESP3 parser/writer is not a Codec — that layer converts wire bytes to/from Frames, not user types.
 _Avoid_: serializer, schema
 
+**Slot**:
+One of the 16384 hash slots a cluster partitions the keyspace into. A key's slot is fixed by CRC16 of the key bytes (or of its hash tag, if present); routing, redirects, topology ownership, and Pipeline splitting are all expressed in terms of slots.
+_Avoid_: bucket, partition, shard (a Shard owns slots — they are not the same)
+
+**Hash Tag**:
+The `{…}` substring of a key whose bytes alone are hashed, so that related keys (`{user:1}:name`, `{user:1}:age`) deliberately land in the same slot. Only the bytes between the first `{` and the first `}` after it are used, and only when that span is non-empty; otherwise the whole key hashes.
+_Avoid_: key tag, slot tag
+
+**Node**:
+One server process in a cluster, addressed by host and port. A Node is a master or a replica within a Shard. The user-facing handle is still the Client; a Node is an internal routing target the engine names, not a connection.
+_Avoid_: server, instance, connection
+
+**Shard**:
+A cluster's unit of replication and slot ownership: one master Node, its replica Nodes, and the slot ranges it owns. The Cluster Topology is a set of Shards.
+_Avoid_: node group, partition
+
+**Cluster Topology**:
+The Core's pure snapshot of which Shards own which slots, the input every routing decision reads. Produced by the runtime from `CLUSTER SHARDS`/`SLOTS` and refreshed on redirects; the engine only consumes it.
+_Avoid_: cluster map, slot map, layout
+
+**Redirect**:
+A server reply telling the client a slot lives elsewhere. `MOVED` is permanent — the slot's owner changed, refresh the topology — while `ASK` is a one-shot hand-off during a live migration: send the single command (prefixed with `ASKING`) to the named node without touching the topology. The Core parses both into one value; acting on the difference is the runtime's job.
+_Avoid_: move, redirection, MOVED (the umbrella term covers both kinds)
+
 ## Example dialogue
 
 > **Dev**: When a fiber calls `client.get`, does it borrow a connection from a pool?
