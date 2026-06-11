@@ -166,6 +166,18 @@ _Avoid_: broadcast (reserved for classic `PUBLISH`), fan-out
 A named, server-stored collection of Functions loaded as one unit of code under one engine (e.g. Lua) by `FUNCTION LOAD`, which returns its name. `FUNCTION LIST` groups Functions under their Library; `FUNCTION DELETE` removes a whole Library. A **Function** is one callable entry within a Library, invoked by name with `FCALL`. Distinct from a Script (`EVAL`), which is anonymous code addressed by its SHA, not a named member of a Library.
 _Avoid_: module (a loadable native plugin — see `MODULE`), package
 
+**Array**:
+A Redis-only data type: a sparse, integer-indexed map (index → value) with a write cursor and an optional ring-buffer mode, addressed by the `AR*` commands. Always capitalized to distinguish it from a Frame's RESP Array (a wire value) and from the Scala collections (`Vector`, `Array`) that decoders return.
+_Avoid_: the RESP Array, sparse array, ring buffer (these are aspects, not the type's name)
+
+**Listener**:
+A user-supplied `SageListener` registered in configuration, observing the runtime's Events through one synchronous `onEvent` callback. Lives in the Core — effect-free and `Unit`-returning — so a future integration module binds to it without depending on any Backend; sage invokes it off the command path, so a slow or throwing Listener can never block or break command execution.
+_Avoid_: observer, hook, callback (an internal reply `Try[A] => Unit` is not a Listener)
+
+**Event**:
+A `SageEvent`: one runtime observability signal reported to a Listener — a command completion, a connection lifecycle transition, a cache hit or miss, or a topology change. A sealed hierarchy in the Core, matched exhaustively. Carries no command arguments or payloads, so secrets never reach a Listener. Distinct from a Message (a pub/sub delivery) and a Stream Entry (a record in a Stream) — those are never Events; the domain's "avoid: event" rule bans mislabeling *those*, not this observability type.
+_Avoid_: notification, signal, telemetry; calling a Message or Stream Entry an "event"
+
 ## Example dialogue
 
 > **Dev**: When a fiber calls `client.get`, does it borrow a connection from a pool?
