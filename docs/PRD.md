@@ -50,7 +50,6 @@ Sage: a Scala 3-only, dependency-light, native (no Java client wrapper) Redis/Va
 35. As a contributor, I want commands organized by family with a repeating, reviewable pattern, so that adding a missing command is a small, mechanical PR.
 36. As a contributor, I want the protocol, command, codec, and cluster-routing logic to be pure and testable without any server or socket, so that most development needs no infrastructure.
 37. As a maintainer, I want a coverage test diffing implemented commands against the server specs with an allowlist, so that new server releases surface as failing-test TODOs instead of silent gaps.
-38. As a user on an exotic platform, I want the pure Core published for Scala.js and Scala Native, so that I can build my own runtime on top of it where the JVM runtime doesn't reach.
 
 ## Implementation Decisions
 
@@ -58,7 +57,7 @@ All decisions below were settled during design (see ADRs); the PRD restates them
 
 ### sbt module structure
 
-- **`sage-core`** — pure, zero external dependencies, cross-published JVM/JS/Native, Scala 3.3 LTS. Contains four components:
+- **`sage-core`** — pure, zero external dependencies, JVM-only, Scala 3.3 LTS (ADR-0041). Contains four components:
   - **RESP3 codec**: incremental parser (bytes in → protocol frames out, tolerating partial input across feeds) and frame writer. RESP3 only (ADR-0002); push frames are first-class.
   - **Command model**: `Command[Out]` pure values pairing argument encoding with a typed reply decoder; hand-written command families, no code generation (ADR-0005).
   - **Codecs & Bytes**: an opaque immutable `Bytes` type over `IArray[Byte]` with explicit content equality (ADR-0004); separate key and value codec typeclasses (keys must hash to cluster slots); primitive instances only — sage is not a serialization framework.
@@ -88,7 +87,7 @@ Selected test scope (per design review):
 
 - **All pure Core components** — RESP3 codec (golden wire frames, property tests over arbitrary frame trees and arbitrary chunk-boundary splits of the byte stream), command model (argument encoding goldens, reply decoders fed synthetic frames), codec round-trips, slot engine (known CRC16 vectors, hash-tag cases, routing and split-plan decisions against synthetic topologies).
 - **Multiplexer and client-side cache state machines** — driven through a fake connection: FIFO matching under concurrency, fail-in-flight on connection loss, fail-fast while disconnected, reconnect/resubscribe sequencing; cache hit/miss/TTL/invalidation-eviction behavior fed synthetic invalidation events.
-- **Integration suite** — testcontainers matrix {Redis 6/7/8, Valkey} × {standalone, cluster}, written once against kyo-compat and run per Backend cell (the shared suite is cheap to repeat and catches backend-specific lowering bugs), covering commands-against-real-server behavior, transactions, pub/sub, sharded pub/sub, cluster redirects mid-test, TLS, and auth.
+- **Integration suite** — testcontainers matrix {Redis, Valkey} × {standalone, cluster} against the current pinned releases, written once against kyo-compat and run per Backend cell (the shared suite is cheap to repeat and catches backend-specific lowering bugs), covering commands-against-real-server behavior, transactions, pub/sub, sharded pub/sub, cluster redirects mid-test, TLS, and auth.
 - **Per-Backend smoke tests** — thin suites per published artifact proving the lowered API compiles, connects, and runs a representative slice.
 
 Prior art: none in-repo (greenfield); the golden-frame and fake-connection patterns follow the conventions of comparable protocol libraries.
@@ -100,7 +99,7 @@ Prior art: none in-repo (greenfield); the golden-frame and fake-connection patte
 - **RESP2** and servers older than Redis 6.0, including RESP2-only proxies (ADR-0002).
 - **Safe automatic retry** of provably-unsent/idempotent commands (possible v2 refinement over ADR-0006).
 - **Connection striping** across N multiplexed connections per node (later tuning knob, ADR-0003).
-- **Scala.js / Scala Native runtime** (Core cross-publishes from day one; the Runtime is JVM-first).
+- **Scala.js / Scala Native** — both Core and Runtime are JVM-only; no non-JVM artifact is published (ADR-0041).
 - **Serialization integrations** (circe, zio-schema, …) and **telemetry integrations** (OpenTelemetry) — future modules atop the codec typeclasses and listener SPI.
 - **Upstreaming the socket layer to kyo-compat** — optional, post-production-proof.
 - An offline command queue or sage-owned retry policies (rejected, ADR-0006).
