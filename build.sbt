@@ -7,6 +7,12 @@ val kyoCompatVersion      = "1.0.0-RC2+64-9487771b-SNAPSHOT"
 val munitVersion          = "1.3.2"
 val testcontainersVersion = "0.44.1"
 
+// backend effect libraries, declared explicitly so Scala Steward keeps them current (kyo tracks kyoCompatVersion)
+val zioVersion        = "2.1.26"
+val catsEffectVersion = "3.7.0"
+val fs2Version        = "3.13.0"
+val oxVersion         = "1.0.5"
+
 // competitor baselines for the runtime benchmark harness (dev-only, never published) — see benchmarks/README.md
 val zioRedisVersion   = "1.2.1"
 val redis4catsVersion = "2.0.3"
@@ -89,7 +95,15 @@ lazy val client = (projectMatrix in file("sage-client"))
     publish / skip   := moduleName.value.endsWith("-future"),
     // surfaces the library version to the CLIENT SETINFO LIB-VER announced at connection setup; version comes from sbt-dynver
     buildInfoKeys    := Seq[BuildInfoKey](version),
-    buildInfoPackage := "sage.client"
+    buildInfoPackage := "sage.client",
+    // pin the backend effect libs per cell rather than inheriting them transitively from kyo-compat-<backend>
+    libraryDependencies ++= {
+      val m = moduleName.value
+      if (m.endsWith("-zio")) Seq("dev.zio" %% "zio" % zioVersion, "dev.zio" %% "zio-streams" % zioVersion)
+      else if (m.endsWith("-ce")) Seq("org.typelevel" %% "cats-effect" % catsEffectVersion, "co.fs2" %% "fs2-core" % fs2Version)
+      else if (m.endsWith("-ox")) Seq("com.softwaremill.ox" %% "core" % oxVersion)
+      else Seq.empty
+    }
   )
   .compatLibrary(KyoLib)(VirtualAxis.jvm)(Seq(scala3NextVersion))
   .compatLibrary(ZioLib, CeLib, OxLib)(VirtualAxis.jvm)(Seq(scala3Version))
