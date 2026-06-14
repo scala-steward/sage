@@ -28,7 +28,9 @@ final private[client] class NodePool(
   connectTimeout: FiniteDuration,
   closeTimeout: FiniteDuration,
   dedicatedPool: DedicatedPoolConfig,
-  events: Events = Events.disabled
+  cacheMaxBytes: Long = 0L,
+  events: Events = Events.disabled,
+  dedicatedBootstrap: Option[Vector[Command[?]]] = None
 ) {
 
   private val lock             = new ReentrantLock()
@@ -72,8 +74,10 @@ final private[client] class NodePool(
           connectTimeout,
           closeTimeout,
           dedicatedPool,
+          cacheMaxBytes,
           Some(node),
-          events
+          events,
+          dedicatedBootstrap
         )
         val stale = locked { pendingEstablish.remove(node); if (closed) true else { established.put(node, nc); false } }
         if (stale) { nc.close(); throw NotConnected() }

@@ -18,6 +18,9 @@ final private[client] class NodeClient(connection: MultiplexedConnection, pool: 
     else if (asking) connection.submitAsking(command, callback)
     else connection.submit(command, callback)
 
+  def cachedSubmit[A](command: Command[A], ttlMillis: Long, callback: Try[A] => Unit): Unit =
+    connection.cachedSubmit(command, ttlMillis, callback)
+
   // a pipeline's per-node batch: one round-trip on this node's Multiplexed Connection. False when not connected (nothing submitted), so
   // the caller re-routes each position rather than fabricating per-position errors. Blocking commands never reach here (rejected up front).
   def submitAll(commands: Vector[Command[?]], callbacks: Vector[Try[Any] => Unit]): Boolean =
@@ -50,12 +53,15 @@ private[client] object NodeClient {
     connectTimeout: FiniteDuration,
     closeTimeout: FiniteDuration,
     dedicatedPool: DedicatedPoolConfig,
+    cacheMaxBytes: Long = 0L,
     node: Option[Node] = None,
-    events: Events = Events.disabled
+    events: Events = Events.disabled,
+    dedicatedBootstrap: Option[Vector[Command[?]]] = None
   ): NodeClient = {
     val connection =
-      MultiplexedConnection.connect(factory, scheduler, bootstrap, reconnect, watchdog, connectTimeout, closeTimeout, 0L, node, events)
-    val pool       = DedicatedPool.forConnection(factory, bootstrap, scheduler, connection, dedicatedPool, connectTimeout.toMillis)
+      MultiplexedConnection.connect(factory, scheduler, bootstrap, reconnect, watchdog, connectTimeout, closeTimeout, cacheMaxBytes, node, events)
+    val pool       =
+      DedicatedPool.forConnection(factory, dedicatedBootstrap.getOrElse(bootstrap), scheduler, connection, dedicatedPool, connectTimeout.toMillis)
     new NodeClient(connection, pool)
   }
 }
