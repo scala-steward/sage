@@ -1,29 +1,27 @@
 # Pub/Sub
 
-Subscribing yields a stream of messages in your ecosystem's native stream type: an Ox `Flow`, a ZIO `ZStream`, an fs2 `Stream`, or a Kyo `Stream`. Each message carries the channel it arrived on and a payload decoded with a `ValueCodec`. Ending the stream unsubscribes.
+Subscribing yields a stream of messages in your ecosystem's native stream type: an Ox `Flow`, a ZIO `ZStream`, an fs2 `Stream`, or a Kyo `Stream`. Each message carries the channel it arrived on and a payload decoded with a `ValueCodec`. Ending the stream, or closing its scope, unsubscribes.
 
 ## Classic channels
 
-`subscribe` listens on one or more channels; `publish` sends to a channel. Here a subscriber takes three messages while a publisher sends them:
+`subscribe` listens on one or more channels; `publish` sends to a channel. Here we subscribe, publish three messages, then take them back:
 
 ::: code-group
 
 ```scala [Ox]
-val news      = client.subscribe[String]("news")
-val collector = fork(news.take(3).runToList())
+val news = client.subscribe[String]("news")
 (1 to 3).foreach(i => client.publish("news", s"item-$i"))
-val messages = collector.join() // the three published payloads
+val messages = news.take(3).runToList()
 ```
 
 ```scala [ZIO]
 ZIO.scoped {
   for {
     stream   <- client.subscribeScoped[String]("news")
-    sub      <- stream.take(3).runCollect.fork
     _        <- ZIO.foreachDiscard(1 to 3) { i =>
                   client.publish("news", s"item-$i")
                 }
-    messages <- sub.join
+    messages <- stream.take(3).runCollect
   } yield messages.map(_.payload).toList
 }
 ```
@@ -31,25 +29,21 @@ ZIO.scoped {
 ```scala [Cats Effect]
 client.subscribeResource[String]("news").use { stream =>
   for {
-    sub      <- stream.take(3).compile.toVector.start
     _        <- (1 to 3).toList.traverse_ { i =>
                   client.publish("news", s"item-$i")
                 }
-    messages <- sub.joinWithNever
+    messages <- stream.take(3).compile.toVector
   } yield messages.map(_.payload).toList
 }
 ```
 
 ```scala [Kyo]
 for {
-  stream    <- client.subscribeScoped[String]("news")
-  publisher <- Fiber.init {
-                 Kyo.foreachDiscard(1 to 3) { i =>
-                   client.publish("news", s"item-$i")
-                 }
-               }
-  chunk     <- stream.take(3).run
-  _         <- publisher.get
+  stream <- client.subscribeScoped[String]("news")
+  _      <- Kyo.foreachDiscard(1 to 3) { i =>
+              client.publish("news", s"item-$i")
+            }
+  chunk  <- stream.take(3).run
 } yield chunk.toList.map(_.payload)
 ```
 
@@ -58,7 +52,7 @@ for {
 Pattern subscriptions are also available; they deliver a **pattern message** that additionally names the glob that matched.
 
 ::: tip Confirmed subscriptions
-The plain `subscribe` returns the stream immediately and registers the subscription lazily, on the first pull. That is fine for a long-lived consumer, but a `publish` sequenced right after it can outrun the registration and be missed. To close that gap, the effectful backends expose a variant that returns only once the server has confirmed the SUBSCRIBE: `subscribeScoped` / `pSubscribeScoped` / `sSubscribeScoped` on ZIO (a `ZIO[Scope, _, _]`) and Kyo, and `subscribeResource` / `pSubscribeResource` / `sSubscribeResource` on cats-effect (a `Resource`). On Ox the plain `subscribe` is already this: the call is synchronous and returns once confirmed. The examples above use these so the publisher can't race the subscriber.
+The plain `subscribe` returns the stream immediately and registers the subscription lazily, on the first pull. That is fine for a long-lived consumer, but a `publish` sequenced right after it can outrun the registration and be missed. To close that gap, the effectful backends expose a variant that returns only once the server has confirmed the SUBSCRIBE: `subscribeScoped` / `pSubscribeScoped` / `sSubscribeScoped` on ZIO (a `ZIO[Scope, _, _]`) and Kyo, and `subscribeResource` / `pSubscribeResource` / `sSubscribeResource` on cats-effect (a `Resource`). On Ox the plain `subscribe` is already this: the call is synchronous and returns once confirmed. The examples above use these so the publisher can't race the subscriber. With these variants the `Scope` or `Resource` owns the unsubscribe, so the subscription outlives the stream's completion and is released only when that scope closes.
 :::
 
 ::: tip Connection isolation
@@ -73,9 +67,8 @@ In a cluster, a **shard channel** keeps its traffic within the shard that owns t
 ZIO.scoped {
   for {
     stream   <- client.sSubscribeScoped[String]("orders")
-    sub      <- stream.take(1).runCollect.fork
     _        <- client.sPublish("orders", "placed")
-    messages <- sub.join
+    messages <- stream.take(1).runCollect
   } yield messages.map(_.payload).toList
 }
 ```

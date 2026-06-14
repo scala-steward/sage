@@ -91,11 +91,10 @@ class ZioSmokeSuite extends ServerSuite(Images.redis) {
       val program: Task[Unit] =
         ZIO.scoped {
           for {
-            client    <- SageClient.scoped(configOf(server))
-            stream    <- client.subscribeScoped[String]("smoke")
-            collected <- stream.take(3).runCollect.fork
-            _         <- ZIO.foreachDiscard(1 to 3)(i => client.publish("smoke", s"m$i"))
-            messages  <- collected.join
+            client   <- SageClient.scoped(configOf(server))
+            stream   <- client.subscribeScoped[String]("smoke")
+            _        <- ZIO.foreachDiscard(1 to 3)(i => client.publish("smoke", s"m$i"))
+            messages <- stream.take(3).runCollect
           } yield {
             assertEquals(messages.map(_.channel).toSet, Set("smoke"))
             assertEquals(messages.map(_.payload).toList, List("m1", "m2", "m3"))

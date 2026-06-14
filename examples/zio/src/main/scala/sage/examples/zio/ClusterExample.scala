@@ -18,12 +18,11 @@ object ClusterExample {
   val run: ZIO[Any, Throwable, Unit] =
     ZIO.scoped {
       for {
-        client     <- SageClient.scoped(config)
-        stream     <- client.sSubscribeScoped[String]("orders")
-        subscriber <- stream.take(1).runCollect.fork
-        _          <- client.sPublish("orders", "placed")
-        messages   <- subscriber.join
-        _          <- Console.printLine(s"sharded=${messages.map(_.payload).toList}")
+        client   <- SageClient.scoped(config)
+        stream   <- client.sSubscribeScoped[String]("orders")
+        _        <- client.sPublish("orders", "placed")
+        messages <- stream.take(1).runCollect
+        _        <- Console.printLine(s"sharded=${messages.map(_.payload).toList}")
       } yield ()
     }
 }

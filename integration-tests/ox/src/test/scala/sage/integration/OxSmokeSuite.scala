@@ -73,13 +73,12 @@ class OxSmokeSuite extends ServerSuite(Images.redis) {
   test("subscribe delivers published messages as a native Ox Flow") {
     withContainers { server =>
       supervised {
-        val client    = SageClient.scoped(configOf(server))
-        val stream    = client.subscribe[String]("smoke")
-        val collector = fork(stream.take(3).runToList())
+        val client   = SageClient.scoped(configOf(server))
+        val stream   = client.subscribe[String]("smoke")
         (1 to 3).foreach { i =>
           val _ = client.publish("smoke", s"m$i")
         }
-        val messages  = collector.join()
+        val messages = stream.take(3).runToList()
         assertEquals(messages.map(_.channel).toSet, Set("smoke"))
         assertEquals(messages.map(_.payload), List("m1", "m2", "m3"))
       }

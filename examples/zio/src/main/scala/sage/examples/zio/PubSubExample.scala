@@ -6,8 +6,8 @@ import sage.*
 import sage.zio.*
 
 /**
-  * Classic channel pub/sub surfaced as a native `ZStream`. The subscriber is forked first; closing the stream's scope unsubscribes. Sharded
-  * pub/sub (`sSubscribe`/`sPublish`) is shown in the cluster spotlight, where it belongs.
+  * Classic channel pub/sub surfaced as a native `ZStream`; closing the surrounding scope unsubscribes. Sharded pub/sub
+  * (`sSubscribe`/`sPublish`) is shown in the cluster spotlight, where it belongs.
   */
 object PubSubExample {
 
@@ -15,11 +15,10 @@ object PubSubExample {
     ZIO.serviceWithZIO[SageClient] { client =>
       ZIO.scoped {
         for {
-          stream     <- client.subscribeScoped[String]("news")
-          subscriber <- stream.take(3).runCollect.fork
-          _          <- ZIO.foreachDiscard(1 to 3)(i => client.publish("news", s"item-$i"))
-          messages   <- subscriber.join
-          _          <- Console.printLine(s"received=${messages.map(_.payload).toList}")
+          stream   <- client.subscribeScoped[String]("news")
+          _        <- ZIO.foreachDiscard(1 to 3)(i => client.publish("news", s"item-$i"))
+          messages <- stream.take(3).runCollect
+          _        <- Console.printLine(s"received=${messages.map(_.payload).toList}")
         } yield ()
       }
     }

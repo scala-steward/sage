@@ -90,9 +90,8 @@ class CeSmokeSuite extends ServerSuite(Images.redis) {
         SageClient.resource(configOf(server)).use { client =>
           client.subscribeResource[String]("smoke").use { stream =>
             for {
-              collected <- stream.take(3).compile.toVector.start
-              _         <- (1 to 3).toList.traverse_(i => client.publish("smoke", s"m$i"))
-              messages  <- collected.joinWithNever
+              _        <- (1 to 3).toList.traverse_(i => client.publish("smoke", s"m$i"))
+              messages <- stream.take(3).compile.toVector
             } yield {
               assertEquals(messages.map(_.channel).toSet, Set("smoke"))
               assertEquals(messages.map(_.payload).toList, List("m1", "m2", "m3"))
