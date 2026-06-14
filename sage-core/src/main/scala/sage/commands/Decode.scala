@@ -218,10 +218,12 @@ private[commands] object Decode {
   }
 
   def nestedPairs[K, V](using KeyCodec[K], ValueCodec[V]): Frame => Either[DecodeError, Vector[(K, V)]] = {
-    val pair = array2(key[K], value[V], "field/value pair")(_ -> _) {
-      case Frame.Array(rows) => each(rows)(pair)
-      case other             => Left(DecodeError("array of field/value pairs", Frame.describe(other)))
-    }
+    val pair = array2(key[K], value[V], "field/value pair")(_ -> _)
+    frame =>
+      frame match {
+        case Frame.Array(rows) => each(rows)(pair)
+        case other             => Left(DecodeError("array of field/value pairs", Frame.describe(other)))
+      }
   }
 
   private val scanCursor: Frame => Either[DecodeError, Option[ScanCursor]] = {
