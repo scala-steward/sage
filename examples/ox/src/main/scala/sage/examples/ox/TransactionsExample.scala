@@ -3,7 +3,7 @@ package sage.examples.ox
 import ox.Ox
 
 import sage.*
-import sage.ox.*
+import sage.backend.*
 
 /**
   * A WATCH-guarded MULTI/EXEC transaction on one leased Dedicated Connection: read inside the scope, decide, then `exec` a Pipeline

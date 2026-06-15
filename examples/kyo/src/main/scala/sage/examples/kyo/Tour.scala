@@ -3,7 +3,7 @@ package sage.examples.kyo
 import kyo.*
 
 import sage.*
-import sage.kyo.*
+import sage.backend.*
 
 /**
   * Runnable Kyo tour. The client is opened with `scoped` and its `Scope` discharged with `Scope.run`, the idiomatic Kyo construction form,

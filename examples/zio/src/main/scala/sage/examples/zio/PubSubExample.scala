@@ -3,7 +3,7 @@ package sage.examples.zio
 import zio.*
 
 import sage.*
-import sage.zio.*
+import sage.backend.*
 
 /**
   * Classic channel pub/sub surfaced as a native `ZStream`; closing the surrounding scope unsubscribes. Sharded pub/sub

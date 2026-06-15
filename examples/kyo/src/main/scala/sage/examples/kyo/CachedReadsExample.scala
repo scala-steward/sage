@@ -3,7 +3,7 @@ package sage.examples.kyo
 import kyo.*
 
 import sage.*
-import sage.kyo.*
+import sage.backend.*
 
 /**
   * A Cached Read opts in to client-side caching per call: the first read fetches and caches, the second is served from the local cache until

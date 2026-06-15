@@ -3,7 +3,7 @@ package sage.examples.zio
 import zio.*
 
 import sage.*
-import sage.zio.*
+import sage.backend.*
 
 /**
   * A WATCH-guarded MULTI/EXEC transaction on one leased Dedicated Connection: read inside the scope, decide, then `exec` a Pipeline

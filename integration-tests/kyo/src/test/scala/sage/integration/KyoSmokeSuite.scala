@@ -3,7 +3,7 @@ package sage.integration
 import kyo.*
 
 import sage.*
-import sage.kyo.*
+import sage.backend.*
 
 class KyoSmokeSuite extends ServerSuite(Images.redis) {
 

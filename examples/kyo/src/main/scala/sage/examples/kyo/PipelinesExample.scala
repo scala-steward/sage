@@ -3,7 +3,7 @@ package sage.examples.kyo
 import kyo.*
 
 import sage.*
-import sage.kyo.*
+import sage.backend.*
 
 /**
   * A Pipeline is an applicative composition of Commands sent in one round-trip, yielding a typed tuple. `pipelineAttempt` keeps each

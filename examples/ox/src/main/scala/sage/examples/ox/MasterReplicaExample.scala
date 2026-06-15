@@ -3,7 +3,7 @@ package sage.examples.ox
 import ox.Ox
 
 import sage.*
-import sage.ox.*
+import sage.backend.*
 
 /**
   * Master-replica spotlight. The deployment is selected by `Topology.MasterReplica`; the same client discovers the master and its replicas

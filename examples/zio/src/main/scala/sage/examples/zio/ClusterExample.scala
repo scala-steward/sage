@@ -3,7 +3,7 @@ package sage.examples.zio
 import zio.*
 
 import sage.*
-import sage.zio.*
+import sage.backend.*
 
 /**
   * Cluster spotlight. A cluster is just configuration — the same client type discovers the topology from the seeds and routes every command

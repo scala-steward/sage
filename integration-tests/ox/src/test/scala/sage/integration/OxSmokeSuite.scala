@@ -3,7 +3,7 @@ package sage.integration
 import ox.{fork, supervised}
 
 import sage.*
-import sage.ox.*
+import sage.backend.*
 
 class OxSmokeSuite extends ServerSuite(Images.redis) {
 

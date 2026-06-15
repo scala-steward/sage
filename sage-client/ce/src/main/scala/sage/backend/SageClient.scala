@@ -1,4 +1,4 @@
-package sage.ce
+package sage.backend
 
 import java.util.concurrent.TimeUnit
 
@@ -253,7 +253,7 @@ object SageClient {
   type Keyed[K] = Client[IO, K]
 
   // bounded poll so xConsume's blocking read returns periodically, keeping cancellation responsive
-  private[ce] val defaultPoll: BlockTimeout = BlockTimeout.After(FiniteDuration(5, TimeUnit.SECONDS))
+  private[backend] val defaultPoll: BlockTimeout = BlockTimeout.After(FiniteDuration(5, TimeUnit.SECONDS))
 
   def connect(config: SageConfig): IO[SageClient] =
     Client.connect(config).lower.map(new Lowered(_))

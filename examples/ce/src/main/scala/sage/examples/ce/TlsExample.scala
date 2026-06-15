@@ -3,7 +3,7 @@ package sage.examples.ce
 import cats.effect.IO
 
 import sage.*
-import sage.ce.*
+import sage.backend.*
 
 /**
   * TLS + ACL spotlight. Both are pure configuration on top of the same client: `tls` selects the trust source (here the system trust store;

@@ -9,8 +9,8 @@ import zio.schema.codec.{BinaryCodec, DecodeError}
 import zio.stream.ZPipeline
 
 import sage.*
+import sage.backend.*
 import sage.client.{Endpoint, SageConfig, Topology}
-import sage.zio.*
 
 /**
   * The ZIO cell's benchmark clients: sage (native) and zio-redis (native).

@@ -3,7 +3,7 @@ package sage.examples.ce
 import cats.effect.IO
 
 import sage.*
-import sage.ce.*
+import sage.backend.*
 
 /**
   * Redis Streams: append entries, read them back by range, then consume them through a Consumer Group with explicit acknowledgement. The

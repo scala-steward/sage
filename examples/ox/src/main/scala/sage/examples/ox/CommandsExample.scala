@@ -5,8 +5,8 @@ import scala.concurrent.duration.*
 import ox.Ox
 
 import sage.*
+import sage.backend.*
 import sage.examples.User
-import sage.ox.*
 
 /**
   * Commands across several families in direct style: every method returns its value directly inside an Ox scope (the `using Ox`).

@@ -3,8 +3,8 @@ package sage.benchmarks
 import kyo.*
 
 import sage.*
+import sage.backend.*
 import sage.client.{Endpoint, SageConfig, Topology}
-import sage.kyo.*
 
 /**
   * The Kyo cell's benchmark clients: sage only — no native Kyo competitor exists.

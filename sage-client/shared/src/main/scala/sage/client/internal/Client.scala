@@ -2029,7 +2029,7 @@ private[sage] enum ScanStep {
 }
 
 /**
-  * The user-facing client over an effect `F`, aliased per backend as `SageClient` (e.g. `sage.zio.SageClient = Client[Task]`). It owns all
+  * The user-facing client over an effect `F`, aliased per backend as `sage.backend.SageClient` (e.g. `Client[Task]` in the ZIO build). It owns all
   * connections to one server or cluster and exposes the whole command catalogue through the inherited [[CommandRunner]] sugar (`get`, `set`,
   * …), each delegating to [[CommandRunner.run]]. Ordinary commands are auto-pipelined onto the Multiplexed Connection; only [[transaction]],
   * blocking commands, and pub/sub acquire other connections, transparently. Constructed with a backend's `connect`/`scoped` and released with

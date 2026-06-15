@@ -3,7 +3,7 @@ package sage.examples.zio
 import zio.*
 
 import sage.*
-import sage.zio.*
+import sage.backend.*
 
 /**
   * Runnable ZIO tour. The client is wired as a `ZLayer` and shared across every snippet, the idiomatic ZIO construction form. Start a server

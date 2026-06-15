@@ -5,7 +5,7 @@ import cats.effect.unsafe.implicits.global
 import cats.syntax.all.*
 
 import sage.*
-import sage.ce.*
+import sage.backend.*
 
 class CeSmokeSuite extends ServerSuite(Images.redis) {
 

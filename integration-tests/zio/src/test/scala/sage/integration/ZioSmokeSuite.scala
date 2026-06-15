@@ -3,7 +3,7 @@ package sage.integration
 import zio.*
 
 import sage.*
-import sage.zio.*
+import sage.backend.*
 
 class ZioSmokeSuite extends ServerSuite(Images.redis) {
 

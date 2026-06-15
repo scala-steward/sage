@@ -3,7 +3,7 @@ package sage.examples.ce
 import cats.effect.{IO, IOApp}
 
 import sage.*
-import sage.ce.*
+import sage.backend.*
 
 /**
   * Runnable cats-effect tour. The client is acquired as a `Resource`, the idiomatic cats-effect construction form, and shared across every

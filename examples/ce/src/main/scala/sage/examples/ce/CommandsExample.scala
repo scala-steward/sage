@@ -5,7 +5,7 @@ import scala.concurrent.duration.*
 import cats.effect.IO
 
 import sage.*
-import sage.ce.*
+import sage.backend.*
 import sage.examples.User
 
 /**

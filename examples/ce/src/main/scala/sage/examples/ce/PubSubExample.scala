@@ -4,7 +4,7 @@ import cats.effect.IO
 import cats.syntax.all.*
 
 import sage.*
-import sage.ce.*
+import sage.backend.*
 
 /**
   * Classic channel pub/sub surfaced as a native fs2 `Stream`; releasing the resource unsubscribes. Sharded pub/sub is shown in the cluster

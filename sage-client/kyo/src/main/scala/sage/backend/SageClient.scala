@@ -1,4 +1,4 @@
-package sage.kyo
+package sage.backend
 
 import scala.annotation.unused
 import scala.concurrent.duration.FiniteDuration
@@ -278,7 +278,7 @@ object SageClient {
   type Keyed[K] = Client[[A] =>> A < (Abort[Throwable] & Async), K]
 
   // bounded poll so xConsume's blocking read returns periodically, keeping cancellation responsive
-  private[kyo] val defaultPoll: BlockTimeout = BlockTimeout.After(FiniteDuration(5, java.util.concurrent.TimeUnit.SECONDS))
+  private[backend] val defaultPoll: BlockTimeout = BlockTimeout.After(FiniteDuration(5, java.util.concurrent.TimeUnit.SECONDS))
 
   def connect(config: SageConfig): SageClient < (Abort[Throwable] & Async) =
     Client.connect(config).lower.map(new Lowered(_))

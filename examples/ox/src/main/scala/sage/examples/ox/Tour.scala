@@ -3,7 +3,7 @@ package sage.examples.ox
 import ox.supervised
 
 import sage.*
-import sage.ox.*
+import sage.backend.*
 
 /**
   * Runnable Ox tour. The client is opened with `scoped` inside a `supervised` concurrency scope — the idiomatic Ox direct-style construction

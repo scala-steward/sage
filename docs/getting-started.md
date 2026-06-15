@@ -28,7 +28,7 @@ Add the artifact for your effect system. The core is pulled in transitively, so 
 
 :::
 
-Two imports cover everything: `import sage.*` for the command vocabulary and connection config, and `import sage.<backend>.*` for the client.
+Two imports cover everything: `import sage.*` for the command vocabulary and connection config, and `import sage.backend.*` for the client. That second import is the same regardless of effect system; only the dependency you choose differs.
 
 ## Your first connection
 
@@ -40,7 +40,7 @@ A `SageClient` owns all connections to one server or cluster. You build it from 
 import ox.supervised
 
 import sage.*
-import sage.ox.*
+import sage.backend.*
 
 @main def main(): Unit =
   supervised {
@@ -58,7 +58,7 @@ import sage.ox.*
 import zio.*
 
 import sage.*
-import sage.zio.*
+import sage.backend.*
 
 object Main extends ZIOAppDefault {
   val config = SageConfig(
@@ -79,7 +79,7 @@ object Main extends ZIOAppDefault {
 import cats.effect.{IO, IOApp}
 
 import sage.*
-import sage.ce.*
+import sage.backend.*
 
 object Main extends IOApp.Simple {
   val config = SageConfig(
@@ -100,7 +100,7 @@ object Main extends IOApp.Simple {
 import kyo.*
 
 import sage.*
-import sage.kyo.*
+import sage.backend.*
 
 object Main extends KyoApp {
   val config = SageConfig(

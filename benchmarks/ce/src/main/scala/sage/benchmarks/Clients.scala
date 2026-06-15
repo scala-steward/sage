@@ -7,7 +7,7 @@ import dev.profunktor.redis4cats.Redis
 import dev.profunktor.redis4cats.effect.Log.NoOp.given
 
 import sage.*
-import sage.ce.*
+import sage.backend.*
 import sage.client.{Endpoint, SageConfig, Topology}
 
 /**

@@ -3,7 +3,7 @@ package sage.examples.kyo
 import kyo.*
 
 import sage.*
-import sage.kyo.*
+import sage.backend.*
 
 /**
   * Redis Streams: append entries, read them back by range, then consume them through a Consumer Group with explicit acknowledgement. The

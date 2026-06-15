@@ -3,7 +3,7 @@ package sage.examples.ce
 import cats.effect.IO
 
 import sage.*
-import sage.ce.*
+import sage.backend.*
 
 /**
   * A WATCH-guarded MULTI/EXEC transaction on one leased Dedicated Connection: read inside the scope, decide, then `exec` a Pipeline

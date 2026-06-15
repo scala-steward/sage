@@ -9,8 +9,8 @@ import _root_.ox.{fork, supervised}
 import io.lettuce.core.{RedisClient, RedisFuture}
 
 import sage.*
+import sage.backend.*
 import sage.client.{Endpoint, SageConfig, Topology}
-import sage.ox.*
 
 /**
   * The Ox cell's benchmark clients: sage (direct style) and raw Lettuce driven async/auto-pipelined — the JVM ceiling.

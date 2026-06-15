@@ -3,7 +3,7 @@ package sage.examples.zio
 import zio.*
 
 import sage.*
-import sage.zio.*
+import sage.backend.*
 
 /**
   * A Pipeline is an applicative composition of Commands sent in one round-trip, yielding a typed tuple. `pipelineAttempt` keeps each

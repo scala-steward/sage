@@ -3,7 +3,7 @@ package sage.examples.zio
 import zio.*
 
 import sage.*
-import sage.zio.*
+import sage.backend.*
 
 /**
   * A Cached Read opts in to client-side caching per call: the first read fetches and caches, the second is served from the local cache until

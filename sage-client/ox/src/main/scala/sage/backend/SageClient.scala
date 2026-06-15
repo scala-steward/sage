@@ -1,4 +1,4 @@
-package sage.ox
+package sage.backend
 
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -248,7 +248,7 @@ object SageClient {
   type Keyed[K] = Client[[A] =>> Ox ?=> A, K]
 
   // bounded poll so xConsume's blocking read returns periodically, keeping cancellation responsive
-  private[ox] val defaultPoll: BlockTimeout = BlockTimeout.After(FiniteDuration(5, TimeUnit.SECONDS))
+  private[backend] val defaultPoll: BlockTimeout = BlockTimeout.After(FiniteDuration(5, TimeUnit.SECONDS))
 
   def connect(config: SageConfig): Ox ?=> SageClient = new Lowered(Client.connect(config).lower)
 
