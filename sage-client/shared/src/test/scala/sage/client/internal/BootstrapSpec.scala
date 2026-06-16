@@ -4,7 +4,7 @@ import scala.util.{Failure, Success}
 
 import sage.SageException.{ConnectionLost, ServerError}
 import sage.client.AuthConfig
-import sage.commands.{Command, Connection}
+import sage.commands.Connection
 
 class BootstrapSpec extends munit.FunSuite {
 
