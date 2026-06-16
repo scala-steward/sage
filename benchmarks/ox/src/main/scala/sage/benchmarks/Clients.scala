@@ -3,10 +3,14 @@ package sage.benchmarks
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.{AtomicInteger, AtomicLong, AtomicReference}
 
+import scala.concurrent.{Await, Future}
+import scala.concurrent.duration.*
 import scala.jdk.CollectionConverters.*
+import scala.util.{Failure, Success}
 
 import _root_.ox.{fork, supervised}
 import io.lettuce.core.{RedisClient, RedisFuture}
+import org.apache.pekko.actor.ActorSystem
 
 import sage.*
 import sage.backend.*
@@ -17,9 +21,10 @@ import sage.client.{Endpoint, SageConfig, Topology}
   */
 object Clients {
   def build(host: String, port: Int, name: String): BenchClient = name match {
-    case "sage-ox" => new SageOxBench(host, port)
-    case "lettuce" => new LettuceBench(host, port)
-    case other     => throw new IllegalArgumentException(s"unknown client: $other")
+    case "sage-ox"   => new SageOxBench(host, port)
+    case "lettuce"   => new LettuceBench(host, port)
+    case "rediscala" => new RediscalaBench(host, port)
+    case other       => throw new IllegalArgumentException(s"unknown client: $other")
   }
 }
 
@@ -157,5 +162,72 @@ final class LettuceBench(host: String, port: Int) extends BenchClient {
   def close(): Unit = {
     conn.close()
     client.shutdown()
+  }
+}
+
+/**
+  * Rediscala (Apache Pekko actor + Future based, auto-pipelined). Driven like Lettuce: a sliding window keeps exactly `concurrency` futures
+  * in flight so the shared connection coalesces them, with completions running on the Pekko dispatcher.
+  */
+final class RediscalaBench(host: String, port: Int) extends BenchClient {
+
+  private given system: ActorSystem = ActorSystem("rediscala-bench")
+  import system.dispatcher
+  private val client                = redis.RedisClient(host, port)
+
+  def name: String = "rediscala"
+
+  private def await[A](f: Future[A]): A = Await.result(f, 5.minutes)
+
+  def seed(prefix: String, count: Int, value: String, hashKey: String, fields: Int): Unit = {
+    val writes = (0 until count).map(i => client.set(s"$prefix:$i", value)) ++ (0 until fields).map(i => client.hset(hashKey, s"f$i", value))
+    writes.foreach { f =>
+      val _ = await(f)
+    }
+  }
+
+  // mirrors LettuceBench.slidingWindow: keep `concurrency` futures in flight, each completion fires the next key so a slow lane never barriers
+  private def slidingWindow[T](keys: Array[String], concurrency: Int)(submit: String => Future[T])(score: T => Long): Long = {
+    val n                = keys.length
+    val width            = math.max(1, math.min(concurrency, n))
+    val total            = new AtomicLong(0L)
+    val nextIndex        = new AtomicInteger(0)
+    val remaining        = new CountDownLatch(n)
+    val failure          = new AtomicReference[Throwable]()
+    def fireNext(): Unit = {
+      val i = nextIndex.getAndIncrement()
+      if (i < n)
+        submit(keys(i)).onComplete { result =>
+          result match {
+            case Success(v) => val _ = total.addAndGet(score(v))
+            case Failure(t) => val _ = failure.compareAndSet(null, t)
+          }
+          remaining.countDown()
+          fireNext()
+        }
+    }
+    var k                = 0
+    while (k < width) { fireNext(); k += 1 }
+    remaining.await()
+    val t                = failure.get()
+    if (t != null) throw t // never publish numbers for a run where commands failed
+    total.get()
+  }
+
+  def getAll(keys: Array[String], concurrency: Int): Long =
+    slidingWindow(keys, concurrency)(k => client.get[String](k))(_.fold(0L)(_.length.toLong))
+
+  def setAll(keys: Array[String], value: String, concurrency: Int): Long = {
+    val _ = slidingWindow(keys, concurrency)(k => client.set(k, value))(_ => 0L)
+    keys.length.toLong
+  }
+
+  def mget(keys: Array[String]): Long = await(client.mget[String](keys*)).flatten.map(_.length.toLong).sum
+
+  def hgetall(key: String): Long = await(client.hgetall[String](key)).size.toLong
+
+  def close(): Unit = {
+    client.stop()
+    val _ = Await.result(system.terminate(), 30.seconds)
   }
 }

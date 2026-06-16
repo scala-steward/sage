@@ -17,6 +17,7 @@ val oxVersion         = "1.0.5"
 val zioRedisVersion   = "1.2.1"
 val redis4catsVersion = "2.0.3"
 val lettuceVersion    = "7.6.0.RELEASE"
+val rediscalaVersion  = "2.1.0"
 
 inThisBuild(
   List(
@@ -162,8 +163,7 @@ lazy val benchmarks = (projectMatrix in file("benchmarks"))
       val m = moduleName.value
       if (m.endsWith("-zio")) Seq("dev.zio" %% "zio-redis" % zioRedisVersion)
       else if (m.endsWith("-ce")) Seq("dev.profunktor" %% "redis4cats-effects" % redis4catsVersion)
-      // Lettuce (raw Java, async/auto-pipelined) is the JVM ceiling in the flat results
-      else if (m.endsWith("-ox")) Seq("io.lettuce" % "lettuce-core" % lettuceVersion)
+      else if (m.endsWith("-ox")) Seq("io.lettuce" % "lettuce-core" % lettuceVersion, "io.github.rediscala" %% "rediscala" % rediscalaVersion)
       else Seq.empty
     }
   )
