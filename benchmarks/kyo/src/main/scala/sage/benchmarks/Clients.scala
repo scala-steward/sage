@@ -38,9 +38,7 @@ final class SageKyoBench(host: String, port: Int) extends BenchClient {
   def getAll(keys: Array[String], concurrency: Int): Long =
     Run(
       Async
-        .foreach(Payloads.groups(keys, concurrency).toList, concurrency)(g =>
-          Kyo.foreach(g.toList)(k => client.get[String](k)).map(_.toList)
-        )
+        .foreach(Payloads.groups(keys, concurrency).toList, concurrency)(g => Kyo.foreach(g.toList)(k => client.get[String](k)).map(_.toList))
         .map(_.toList.flatten.flatten.map(_.length.toLong).sum)
     )
 
