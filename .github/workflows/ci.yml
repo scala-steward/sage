@@ -4,10 +4,9 @@ on:
   pull_request:
   push:
     branches: ['main']
-  # re-enable when publishing is set up
-  # release:
-  #   types:
-  #     - published
+  release:
+    types:
+      - published
 
 jobs:
   lint:
@@ -111,27 +110,27 @@ jobs:
         env:
           # ryuk adds a mandatory Docker Hub pull per run (rate-limit exposure) and ephemeral runners need no reaper
           TESTCONTAINERS_RYUK_DISABLED: "true"
-  # re-enable when publishing is set up (requires PGP/Sonatype secrets)
-  # publish:
-  #   runs-on: ubuntu-24.04
-  #   needs: [lint, unit, integration]
-  #   if: github.event_name != 'pull_request'
-  #   steps:
-  #     - name: Checkout current branch
-  #       uses: actions/checkout@v6
-  #       with:
-  #         fetch-depth: 0
-  #     - name: Setup Scala and Java
-  #       uses: coursier/setup-action@v3
-  #       with:
-  #         jvm: temurin:21
-  #         apps: sbt
-  #     - name: Cache scala dependencies
-  #       uses: coursier/cache-action@v8
-  #     - name: Release artifacts
-  #       run: sbt ci-release
-  #       env:
-  #         PGP_PASSPHRASE: ${{ secrets.PGP_PASSPHRASE }}
-  #         PGP_SECRET: ${{ secrets.PGP_SECRET }}
-  #         SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
-  #         SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
+
+  publish:
+    runs-on: ubuntu-24.04
+    needs: [lint, unit, integration]
+    if: github.event_name != 'pull_request'
+    steps:
+      - name: Checkout current branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Setup Scala and Java
+        uses: coursier/setup-action@v3
+        with:
+          jvm: temurin:21
+          apps: sbt
+      - name: Cache scala dependencies
+        uses: coursier/cache-action@v8
+      - name: Release artifacts
+        run: sbt ci-release
+        env:
+          PGP_PASSPHRASE: ${{ secrets.PGP_PASSPHRASE }}
+          PGP_SECRET: ${{ secrets.PGP_SECRET }}
+          SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
+          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
