@@ -3,11 +3,11 @@ import sbt.VirtualAxis
 val scala3Version     = "3.3.7"
 val scala3NextVersion = "3.8.3" // Kyo requires Scala 3.8.x (Next)
 
-val kyoCompatVersion      = "1.0.0-RC2+99-6f012d83-SNAPSHOT"
 val munitVersion          = "1.3.2"
 val testcontainersVersion = "0.44.1"
 
-// backend effect libraries, declared explicitly so Scala Steward keeps them current (kyo tracks kyoCompatVersion)
+// backend effect libraries, declared explicitly so Scala Steward keeps them current
+val kyoVersion        = "1.0.0-RC2+99-6f012d83-SNAPSHOT"
 val zioVersion        = "2.1.26"
 val catsEffectVersion = "3.7.0"
 val fs2Version        = "3.13.0"
@@ -27,7 +27,7 @@ inThisBuild(
     scmInfo          := Some(ScmInfo(url("https://github.com/ghostdogpr/sage/"), "scm:git:git@github.com:ghostdogpr/sage.git")),
     developers       := List(Developer("ghostdogpr", "Pierre Ricadat", "ghostdogpr@gmail.com", url("https://github.com/ghostdogpr"))),
     resolvers += Resolver.sonatypeCentralSnapshots,
-    compatKyoVersion := kyoCompatVersion
+    compatKyoVersion := kyoVersion
   )
 )
 
@@ -83,7 +83,7 @@ lazy val core = (projectMatrix in file("sage-core"))
   )
 
 // Runtime written once against kyo-compat, cross-published per backend. JDK 21+.
-// The kyo cell builds with Scala Next (like proteus/purelogic); the others stay on LTS.
+// The kyo cell builds with Scala Next; the others stay on LTS.
 lazy val client = (projectMatrix in file("sage-client"))
   .dependsOn(core)
   .enablePlugins(BuildInfoPlugin)
