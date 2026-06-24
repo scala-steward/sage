@@ -19,6 +19,15 @@ object SageException {
     */
   final case class DecodeError(expected: String, actual: String) extends SageException(s"expected $expected, got $actual")
 
+  object DecodeError {
+
+    private[sage] def fromThrowable(error: Throwable): DecodeError = {
+      val wrapped = DecodeError("a value the codec could decode", s"the codec threw $error")
+      wrapped.initCause(error)
+      wrapped
+    }
+  }
+
   /**
     * An error reply from the server. `code` is the leading token Redis/Valkey put on every error (`WRONGTYPE`, `NOSCRIPT`, `BUSYGROUP`,
     * the generic `ERR`, …), split out so callers can branch on it — `case ServerError("WRONGTYPE", _)` — without parsing the message
@@ -34,6 +43,12 @@ object SageException {
         case i  => ServerError(raw.substring(0, i), raw.substring(i + 1))
       }
   }
+
+  /**
+    * The initial connection could not be established (host unreachable, refused, or connect timeout). Distinct from [[ConnectionLost]], a
+    * live connection dropping around a command.
+    */
+  final case class ConnectionFailed(message: String) extends SageException(message)
 
   /**
     * The connection dropped around this command. `mayHaveExecuted` is true when it was already in flight — the server may or may not have

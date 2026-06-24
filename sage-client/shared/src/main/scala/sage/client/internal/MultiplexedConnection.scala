@@ -232,14 +232,7 @@ final private[client] class MultiplexedConnection private (
     if (conn != null) conn.checkLiveness(scheduler.nowMillis, watchdog.pingInterval.toMillis, watchdog.pingTimeout.toMillis)
   }
 
-  // mirrors Entry.complete: top-level error frames become a ServerError, and a throwing user decoder fails the call rather than escaping
-  private def decodeFrame[A](command: Command[A], frame: Frame): Try[A] =
-    try
-      Reply.run(command, frame) match {
-        case Right(value) => Success(value)
-        case Left(error)  => Failure(error)
-      }
-    catch { case NonFatal(error) => Failure(error) }
+  private def decodeFrame[A](command: Command[A], frame: Frame): Try[A] = Reply.decode(command, frame)
 
   final private class Conn {
 
