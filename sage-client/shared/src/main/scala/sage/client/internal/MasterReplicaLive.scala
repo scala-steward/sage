@@ -10,7 +10,7 @@ import scala.util.control.NonFatal
 
 import kyo.compat.*
 
-import sage.{Message, PatternMessage, SageException}
+import sage.{CommandSpan, Message, Outcome, PatternMessage, SageException}
 import sage.SageException.{ConnectionLost, NotConnected, TimedOut}
 import sage.client.{ReadFrom, SageConfig}
 import sage.cluster.Node
@@ -154,20 +154,40 @@ final private[client] class MasterReplicaLive(
 
   def run[A](command: Command[A]): CIO[A] =
     CIO.async[A] { complete =>
-      val tracked = Events.trackCommand(events, command, complete)
-      offload(if (readFrom != ReadFrom.Master && ReadRouting.replicaEligible(command)) sendRead(command, tracked) else sendMaster(command, tracked))
+      val span = Events.startSpan(events, command)
+      offload {
+        val tracked = Events.trackCommand(events, command, complete, span)
+        Client.completing(tracked) {
+          if (readFrom != ReadFrom.Master && ReadRouting.replicaEligible(command)) sendRead(command, tracked) else sendMaster(command, tracked)
+        }
+      }
     }
 
   def cached[A](command: Command[A], ttl: FiniteDuration): CIO[A] =
     if (!Client.cacheable(command)) CIO.fail(Client.notCacheable(command))
-    else if (!cachingEnabled) CIO.async[A](complete => offload(sendMaster(command, Events.trackCommand(events, command, complete))))
-    else CIO.async[A](complete => offload(sendMasterCached(command, ttl.toMillis, complete)))
+    else if (!cachingEnabled)
+      CIO.async[A] { complete =>
+        val span = Events.startSpan(events, command)
+        offload {
+          val tracked = Events.trackCommand(events, command, complete, span)
+          Client.completing(tracked)(sendMaster(command, tracked))
+        }
+      }
+    else
+      CIO.async[A] { complete =>
+        val deferred = Events.deferSpan(events, command)
+        offload(Client.completing(complete)(sendMasterCached(command, ttl.toMillis, complete, deferred)))
+      }
 
   private def sendMaster[A](command: Command[A], complete: Try[A] => Unit): Unit =
     onMaster(complete)((nc, _, cb) => nc.submit[A](command, asking = false, cb))
 
-  private def sendMasterCached[A](command: Command[A], ttlMillis: Long, complete: Try[A] => Unit): Unit =
-    onMaster(complete)((nc, _, cb) => nc.cachedSubmit[A](command, ttlMillis, cb))
+  private def sendMasterCached[A](command: Command[A], ttlMillis: Long, complete: Try[A] => Unit, deferred: () => CommandSpan): Unit = {
+    var reached = false
+    onMaster(complete) { (nc, _, cb) => reached = true; nc.cachedSubmit[A](command, ttlMillis, cb, deferred) }
+    // onMaster short-circuited (master down) without reaching cachedSubmit, so settle a Failed span the deferred factory would otherwise never start
+    if (!reached) Events.settleSpan(Events.startDeferred(deferred), Outcome.Failed(NotConnected()))
+  }
 
   // run `submit` on the master, completing with node attribution; an ownership fault (a demoted master) kicks a re-discovery
   private def onMaster[A](complete: Try[A] => Unit)(submit: (NodeClient, Node, Try[A] => Unit) => Unit): Unit = {
@@ -253,6 +273,7 @@ final private[client] class MasterReplicaLive(
       CIO.fail(new IllegalArgumentException("a Pipeline cannot carry blocking commands; run them individually on the client"))
     else
       CIO.async { complete =>
+        val spans = Events.startSpans(events, p.commands)
         offload {
           // all-or-nothing: a fully replica-eligible pipeline batches on a replica, else the master, never split
           val useReplica = readFrom != ReadFrom.Master && p.commands.forall(ReadRouting.replicaEligible)
@@ -260,7 +281,7 @@ final private[client] class MasterReplicaLive(
           // no reachable node fires no wire fault, so re-discover here or a stale replica set / down master strands the pipeline forever
           if (nc == null) triggerRefresh()
           val submit     = if (nc == null) (_: Vector[Command[?]], _: Vector[Try[Any] => Unit]) => false else nc.submitAll
-          Client.submitBatchOnOne(events, p.commands, submit, complete)
+          Client.submitBatchOnOne(events, p.commands, spans, submit, complete)
         }
       }
 
@@ -298,7 +319,7 @@ final private[client] class MasterReplicaLive(
           case e: NotConnected => triggerRefresh(); throw e
           case NonFatal(_)     => triggerRefresh(); throw ConnectionLost(mayHaveExecuted = false)
         }
-      try new MasterReplicaLive.TxLease(new Client.TxScope(nc.acquireForTransaction(), refreshOnTxFault), nc)
+      try new MasterReplicaLive.TxLease(new Client.TxScope(nc.acquireForTransaction(), refreshOnTxFault, events), nc)
       catch {
         case e: NotConnected => triggerRefresh(); throw e
         case e: TimedOut     => throw e
@@ -382,7 +403,7 @@ private[client] object MasterReplicaLive {
         val upgrade = Tls.buildUpgrade(config.tls, node.host, node.port)
         (onFrame, onClosed) => SocketTransport.connect(node.host, node.port, config.connectTimeout, upgrade, onFrame, onClosed)
       }
-      val events                                                  = Events(config.listeners)
+      val events                                                  = Events(config.listeners, config.tracer)
       val live                                                    =
         new MasterReplicaLive(factory, scheduler, bootstrap, config, seeds, masterReplica.minRefreshInterval, events)
       try { live.bootstrapRoles(); live }

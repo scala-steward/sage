@@ -501,7 +501,9 @@ class MultiplexedConnectionSpec extends munit.FunSuite {
     assertEquals(connection.currentState, MultiplexedConnection.State.Closed)
   }
 
-  private def cachedConnection(): (MultiplexedConnection, ManualScheduler, mutable.ArrayBuffer[FakeTransport]) = {
+  private def cachedConnection(
+    events: Events = Events.disabled
+  ): (MultiplexedConnection, ManualScheduler, mutable.ArrayBuffer[FakeTransport]) = {
     val scheduler                                       = new ManualScheduler
     val transports                                      = mutable.ArrayBuffer.empty[FakeTransport]
     val factory: MultiplexedConnection.TransportFactory = (onFrame, onClosed) => {
@@ -510,7 +512,8 @@ class MultiplexedConnectionSpec extends munit.FunSuite {
       transport
     }
     val connection                                      =
-      MultiplexedConnection.connect(factory, scheduler, Vector.empty, fixedBackoff, noWatchdog, 1.second, Duration.Zero, cacheMaxBytes = 1L << 20)
+      MultiplexedConnection
+        .connect(factory, scheduler, Vector.empty, fixedBackoff, noWatchdog, 1.second, Duration.Zero, cacheMaxBytes = 1L << 20, events = events)
     (connection, scheduler, transports)
   }
 
@@ -575,5 +578,31 @@ class MultiplexedConnectionSpec extends munit.FunSuite {
     transports(1).emit(Frame.SimpleString("OK"))
     transports(1).emit(Frame.BulkString(Bytes.utf8("baz")))
     assertEquals(afterReconnect, Some(Success(Some("baz"))))
+  }
+
+  test("a cache miss is traced like an ordinary command; a local hit is not") {
+    val tracer                      = new RecordingTracer
+    val events                      = Events(Vector.empty, Some(tracer))
+    val (connection, _, transports) = cachedConnection(events)
+    val get                         = Strings.get[String, String]("foo")
+
+    connection.cachedSubmit(get, 60000L, _ => ()) // miss -> fetch
+    transports.head.emit(Frame.SimpleString("OK"))
+    transports.head.emit(Frame.BulkString(Bytes.utf8("bar")))
+    assertEquals(tracer.log.toVector, Vector("start:GET", "settled:Succeeded"))
+
+    connection.cachedSubmit(get, 60000L, _ => ())                               // served locally
+    assertEquals(tracer.log.toVector, Vector("start:GET", "settled:Succeeded")) // unchanged: no span for a hit
+  }
+
+  test("a cached read that fails fast (not connected) settles a Failed span, like an ordinary command") {
+    val tracer                              = new RecordingTracer
+    val (connection, _, _)                  = cachedConnection(Events(Vector.empty, Some(tracer)))
+    connection.close()
+    var result: Option[Try[Option[String]]] = None
+    connection.cachedSubmit(Strings.get[String, String]("foo"), 60000L, r => result = Some(r))
+    assert(result.exists(_.isFailure))
+    assertEquals(tracer.log.head, "start:GET")
+    assert(tracer.log.last.startsWith("settled:Failed"))
   }
 }

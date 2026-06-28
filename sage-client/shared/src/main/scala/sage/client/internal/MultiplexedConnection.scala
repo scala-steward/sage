@@ -8,7 +8,7 @@ import scala.concurrent.duration.*
 import scala.util.{Failure, Success, Try}
 import scala.util.control.NonFatal
 
-import sage.{Bytes, Outcome, SageEvent, SageException}
+import sage.{Bytes, CommandSpan, Outcome, SageEvent, SageException}
 import sage.SageException.{ConnectionLost, NotConnected}
 import sage.client.{BackoffConfig, WatchdogConfig}
 import sage.cluster.Node
@@ -81,11 +81,15 @@ final private[client] class MultiplexedConnection private (
   }
 
   // Captures one generation so the cache lookup and the fetch share a connection; a reconnect mid-flight fails the fetch as a normal loss.
-  def cachedSubmit[A](command: Command[A], ttlMillis: Long, callback: Try[A] => Unit): Unit = {
+  // deferred (master-replica) captured the context before offloading; null starts the span inline (standalone). Only a server-bound command is traced.
+  def cachedSubmit[A](command: Command[A], ttlMillis: Long, callback: Try[A] => Unit, deferred: () => CommandSpan = null): Unit = {
     // a Fetch sends [CLIENT CACHING YES, read]; a cache hit/wait sends nothing and releases the reservation
     val conn = reserved(2)
-    if (conn == null) callback(Failure(NotConnected()))
-    else conn.cachedSubmit(command, ttlMillis, callback)
+    if (conn == null) {
+      val error = NotConnected()
+      Events.settleSpan(Events.startOrDefer(events, command, deferred), Outcome.Failed(error))
+      callback(Failure(error))
+    } else conn.cachedSubmit(command, ttlMillis, callback, deferred)
   }
 
   // ASKING must immediately precede its command on the wire (it arms the target node for the next command on the connection). Writing the
@@ -274,7 +278,7 @@ final private[client] class MultiplexedConnection private (
 
     // OPTIN tracking: a cached read writes [CLIENT CACHING YES, <read>] adjacently so only this read is tracked. The read is submitted with
     // an identity decoder so the raw reply Frame reaches the cache; each waiter decodes it with its own command's decoder.
-    def cachedSubmit[A](command: Command[A], ttlMillis: Long, callback: Try[A] => Unit): Unit = {
+    def cachedSubmit[A](command: Command[A], ttlMillis: Long, callback: Try[A] => Unit, deferred: () => CommandSpan): Unit = {
       val commandBytes                = command.encode
       val keys                        = command.keys
       def deliver(frame: Frame): Unit = callback(decodeFrame(command, frame))
@@ -285,10 +289,12 @@ final private[client] class MultiplexedConnection private (
       cache.acquire(commandBytes, keys, scheduler.nowMillis, waiter) match {
         // a Hit serves locally; a Wait coalesces onto an in-flight fetch — both avoid a server round trip, so both are reported as a hit
         // and release the two slots reserved for the (now unsent) fetch
-        case ClientCache.Acquire.Hit(frame) => release(2); events.emit(SageEvent.Cache.Hit(command.name)); deliver(frame)
-        case ClientCache.Acquire.Wait       => release(2); events.emit(SageEvent.Cache.Hit(command.name))
+        case ClientCache.Acquire.Hit(frame) => release(2); if (events.emitsEvents) events.emit(SageEvent.Cache.Hit(command.name)); deliver(frame)
+        case ClientCache.Acquire.Wait       => release(2); if (events.emitsEvents) events.emit(SageEvent.Cache.Hit(command.name))
         case ClientCache.Acquire.Fetch      =>
-          events.emit(SageEvent.Cache.Miss(command.name))
+          if (events.emitsEvents) events.emit(SageEvent.Cache.Miss(command.name))
+          val span                        = Events.startOrDefer(events, command, deferred)
+          node.foreach(Events.routeSpan(span, _))
           val started                     = System.nanoTime()
           val raw                         = Command[Frame](command.name, command.keyIndices, command.args, frame => Right(frame))
           val onReply: Try[Frame] => Unit = { result =>
@@ -296,18 +302,19 @@ final private[client] class MultiplexedConnection private (
               case Success(frame) => cache.store(commandBytes, keys, frame, scheduler.nowMillis, ttlMillis)
               case Failure(error) => cache.fail(commandBytes, error)
             }
-            // a miss touched the server, so unlike a hit it also produces a CommandCompleted; the outcome reflects the decoded reply
-            if (events.enabled)
-              events.emit(
-                SageEvent.CommandCompleted(
-                  command.name,
-                  node,
-                  FiniteDuration(System.nanoTime() - started, NANOSECONDS),
-                  Outcome.of(result.flatMap(decodeFrame(command, _)))
-                )
-              )
+            if (events.enabled) {
+              // the outcome reflects the decoded reply, not the raw identity-decoded frame
+              val outcome = Outcome.of(result.flatMap(decodeFrame(command, _)))
+              Events.settleSpan(span, outcome)
+              if (events.emitsEvents)
+                events.emit(SageEvent.CommandCompleted(command.name, node, FiniteDuration(System.nanoTime() - started, NANOSECONDS), outcome))
+            }
           }
-          submitAll(Vector(Connection.clientCachingYes, raw), Vector(_ => (), onReply.asInstanceOf[Try[Any] => Unit]))
+          try submitAll(Vector(Connection.clientCachingYes, raw), Vector(_ => (), onReply.asInstanceOf[Try[Any] => Unit]))
+          catch {
+            // nothing was sent: release the slots the entries won't retire, and fail the fetch as a reply failure would
+            case NonFatal(error) => release(2); onReply(Failure(error))
+          }
       }
     }
 
