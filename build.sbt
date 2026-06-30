@@ -211,9 +211,9 @@ lazy val benchmarks = (projectMatrix in file("benchmarks"))
       else if (m.endsWith("-ce")) Seq("dev.profunktor" %% "redis4cats-effects" % redis4catsVersion)
       else if (m.endsWith("-ox"))
         Seq(
-          "io.lettuce"          % "lettuce-core" % lettuceVersion,
-          "io.github.rediscala" %% "rediscala"   % rediscalaVersion,
-          "redis.clients"       % "jedis"        % jedisVersion
+          "io.lettuce"           % "lettuce-core" % lettuceVersion,
+          "io.github.rediscala" %% "rediscala"    % rediscalaVersion,
+          "redis.clients"        % "jedis"        % jedisVersion
         )
       else Seq.empty
     }
