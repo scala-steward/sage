@@ -22,6 +22,7 @@ val zioRedisVersion   = "1.2.1"
 val redis4catsVersion = "2.0.3"
 val lettuceVersion    = "7.6.0.RELEASE"
 val rediscalaVersion  = "2.1.0"
+val jedisVersion      = "6.0.0"
 
 // The Pekko backend rides the Future effect cell (kyo-compat-future) plus Pekko Streams. A distinct axis name keeps it separate from the
 // implicit Future anchor (which dedups by name); the nonexistent kyo-compat-pekko dep it makes the plugin inject is stripped in jvmSettings.
@@ -208,7 +209,12 @@ lazy val benchmarks = (projectMatrix in file("benchmarks"))
       val m = moduleName.value
       if (m.endsWith("-zio")) Seq("dev.zio" %% "zio-redis" % zioRedisVersion)
       else if (m.endsWith("-ce")) Seq("dev.profunktor" %% "redis4cats-effects" % redis4catsVersion)
-      else if (m.endsWith("-ox")) Seq("io.lettuce" % "lettuce-core" % lettuceVersion, "io.github.rediscala" %% "rediscala" % rediscalaVersion)
+      else if (m.endsWith("-ox"))
+        Seq(
+          "io.lettuce"          % "lettuce-core" % lettuceVersion,
+          "io.github.rediscala" %% "rediscala"   % rediscalaVersion,
+          "redis.clients"       % "jedis"        % jedisVersion
+        )
       else Seq.empty
     }
   )

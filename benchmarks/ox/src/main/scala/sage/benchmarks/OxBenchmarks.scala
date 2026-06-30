@@ -13,9 +13,9 @@ import org.openjdk.jmh.annotations.*
 @Measurement(iterations = 5, time = 3)
 class ThroughputBench extends RedisBenchState {
 
-  @Param(Array("sage-ox", "lettuce", "rediscala")) var client: String = "sage-ox"
-  @Param(Array("1", "8", "64", "256")) var concurrency: Int           = 1
-  @Param(Array("16", "1024")) var valueSize: Int                      = 16
+  @Param(Array("sage-ox", "lettuce", "rediscala", "jedis")) var client: String = "sage-ox"
+  @Param(Array("1", "8", "64", "256")) var concurrency: Int                    = 1
+  @Param(Array("16", "1024")) var valueSize: Int                               = 16
 
   protected def subjectName: String                                             = client
   override protected def seedValueBytes: Int                                    = valueSize
@@ -34,8 +34,8 @@ class ThroughputBench extends RedisBenchState {
 @Measurement(iterations = 5, time = 3)
 class CollectionBench extends RedisBenchState {
 
-  @Param(Array("sage-ox", "lettuce", "rediscala")) var client: String = "sage-ox"
-  @Param(Array("16")) var valueSize: Int                              = 16
+  @Param(Array("sage-ox", "lettuce", "rediscala", "jedis")) var client: String = "sage-ox"
+  @Param(Array("16")) var valueSize: Int                                       = 16
 
   protected def subjectName: String                                             = client
   override protected def seedValueBytes: Int                                    = valueSize

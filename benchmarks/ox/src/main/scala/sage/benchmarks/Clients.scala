@@ -1,6 +1,6 @@
 package sage.benchmarks
 
-import java.util.concurrent.CountDownLatch
+import java.util.concurrent.{CountDownLatch, Executors}
 import java.util.concurrent.atomic.{AtomicInteger, AtomicLong, AtomicReference}
 
 import scala.concurrent.{Await, Future}
@@ -11,6 +11,7 @@ import scala.util.{Failure, Success}
 import _root_.ox.{fork, supervised}
 import io.lettuce.core.{RedisClient, RedisFuture}
 import org.apache.pekko.actor.ActorSystem
+import redis.clients.jedis.{DefaultJedisClientConfig, HostAndPort, JedisPool, RedisProtocol}
 
 import sage.*
 import sage.backend.*
@@ -24,6 +25,7 @@ object Clients {
     case "sage-ox"   => new SageOxBench(host, port)
     case "lettuce"   => new LettuceBench(host, port)
     case "rediscala" => new RediscalaBench(host, port)
+    case "jedis"     => new JedisBench(host, port)
     case other       => throw new IllegalArgumentException(s"unknown client: $other")
   }
 }
@@ -229,5 +231,82 @@ final class RediscalaBench(host: String, port: Int) extends BenchClient {
   def close(): Unit = {
     client.stop()
     val _ = Await.result(system.terminate(), 30.seconds)
+  }
+}
+
+/**
+  * Jedis is synchronous and blocking, so concurrency comes from running `concurrency` lanes on virtual threads, each borrowing its own
+  * pooled connection (the honest model for a sync client — there is no auto-pipelining). RESP3 is enabled to match the other clients.
+  */
+final class JedisBench(host: String, port: Int) extends BenchClient {
+
+  private val config   = DefaultJedisClientConfig.builder().protocol(RedisProtocol.RESP3).build()
+  private val poolCfg  = {
+    val c = new org.apache.commons.pool2.impl.GenericObjectPoolConfig[redis.clients.jedis.Jedis]()
+    c.setMaxTotal(512)
+    c.setMaxIdle(512)
+    c
+  }
+  private val pool     = new JedisPool(poolCfg, new HostAndPort(host, port), config)
+  private val executor = Executors.newVirtualThreadPerTaskExecutor()
+
+  def name: String = "jedis"
+
+  def seed(prefix: String, count: Int, value: String, hashKey: String, fields: Int): Unit = {
+    val j = pool.getResource()
+    try {
+      val p = j.pipelined()
+      (0 until count).foreach { i =>
+        val _ = p.set(s"$prefix:$i", value)
+      }
+      (0 until fields).foreach { i =>
+        val _ = p.hset(hashKey, s"f$i", value)
+      }
+      p.sync()
+    } finally j.close()
+  }
+
+  // one lane per group on a virtual thread, each with its own borrowed connection running blocking commands sequentially
+  private def lanes(keys: Array[String], concurrency: Int)(run: (redis.clients.jedis.Jedis, Array[String]) => Long): Long =
+    Payloads
+      .groups(keys, concurrency)
+      .map(g =>
+        executor.submit[Long] { () =>
+          val j = pool.getResource()
+          try run(j, g)
+          finally j.close()
+        }
+      )
+      .map(_.get())
+      .sum
+
+  def getAll(keys: Array[String], concurrency: Int): Long =
+    lanes(keys, concurrency)((j, g) => g.foldLeft(0L)((t, k) => t + Option(j.get(k)).fold(0L)(_.length.toLong)))
+
+  def setAll(keys: Array[String], value: String, concurrency: Int): Long = {
+    val _ = lanes(keys, concurrency) { (j, g) =>
+      g.foreach { k =>
+        val _ = j.set(k, value)
+      }
+      g.length.toLong
+    }
+    keys.length.toLong
+  }
+
+  def mget(keys: Array[String]): Long = {
+    val j = pool.getResource()
+    try j.mget(keys*).asScala.iterator.filter(_ != null).map(_.length.toLong).sum
+    finally j.close()
+  }
+
+  def hgetall(key: String): Long = {
+    val j = pool.getResource()
+    try j.hgetAll(key).size.toLong
+    finally j.close()
+  }
+
+  def close(): Unit = {
+    executor.shutdown()
+    pool.close()
   }
 }
