@@ -37,6 +37,11 @@ val config = SageConfig(
 
 Seeds bootstrap discovery only. Once the topology is known, sage routes to the nodes the cluster reports; any one seed answering is enough.
 
+### Hash tags
+
+Redis Cluster hashes the bytes inside the first non-empty `{...}` pair instead of the whole key. Use the same tag in every key that must live
+in one slot, for example `user:{42}:profile` and `user:{42}:settings`. Transactions require all keys to share one slot.
+
 ## Master-replica
 
 Select `Topology.MasterReplica` with seed endpoints. Sage asks each its role, discovers the master and its replicas, sends writes to the master, and routes reads per the read policy:
@@ -87,7 +92,7 @@ The remaining fields tune connection lifecycle, pooling, and observability. Each
 
 | Field | Tunes | Defaults |
 | --- | --- | --- |
-| `connectTimeout` | wait for a connection and its `HELLO 3` setup | `10.seconds` |
+| `connectTimeout` | per socket connect/TLS step and per bootstrap command (`HELLO 3`, identification, optional `SELECT`/`CLIENT SETNAME`, cache setup) | `10.seconds` |
 | `reconnect` (`BackoffConfig`) | exponential reconnect backoff with full jitter | `50.millis` to `5.seconds`, ×2 |
 | `watchdog` (`WatchdogConfig`) | idle-connection liveness ping (death detector) | ping every `60.seconds`, `30.seconds` timeout |
 | `closeTimeout` | how long `close` waits for in-flight commands on the multiplexed connection to drain (blocking commands and transactions on the dedicated pool are force-closed at once) | `5.seconds` |

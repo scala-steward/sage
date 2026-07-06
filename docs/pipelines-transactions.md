@@ -119,7 +119,7 @@ A few rules follow from how Redis transactions work:
 - **Reads inside the scope must be ordinary commands.** A blocking command is rejected rather than parking the lease.
 - **A queueing-phase rejection discards the whole transaction**, so nothing runs.
 - **An execution-phase error leaves the other commands committed.** Redis does not roll back, so those errors surface per position, like a pipeline.
-- **In a cluster, every key in the transaction must hash to one slot** (use a [hash tag](/configuration) to force that). A pipeline has no such restriction.
+- **In a cluster, every key in the transaction must hash to one slot** (use a [hash tag](/configuration#hash-tags) to force that). A pipeline has no such restriction.
 
 ## Which to use
 
