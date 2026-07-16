@@ -60,10 +60,19 @@ final private[client] class DedicatedConnection private (
     if (transport != null) transport.close()
   }
 
+  /**
+    * Opens the socket and runs the bootstrap synchronously; throws (no retry) if the connect or handshake fails.
+    */
+  def establish(bootstrap: Vector[Command[?]]): Unit = {
+    start()
+    runBootstrap(bootstrap)
+  }
+
   private def start(): Unit = {
     val transport = factory(onFrame, onClosed)
     transportRef.set(transport)
-    transport.start()
+    if (dead) transport.close()
+    else transport.start()
   }
 
   private def runBootstrap(bootstrap: Vector[Command[?]]): Unit =
@@ -153,16 +162,8 @@ private[client] object DedicatedConnection {
   }
 
   /**
-    * Connects and runs the bootstrap synchronously; throws (no retry) if the connect or handshake fails.
+    * Builds an unconnected connection; the pool runs the blocking [[DedicatedConnection.establish]] separately.
     */
-  def establish(
-    factory: MultiplexedConnection.TransportFactory,
-    bootstrap: Vector[Command[?]],
-    connectTimeoutMillis: Long
-  ): DedicatedConnection = {
-    val connection = new DedicatedConnection(factory, connectTimeoutMillis)
-    connection.start()
-    connection.runBootstrap(bootstrap)
-    connection
-  }
+  def create(factory: MultiplexedConnection.TransportFactory, connectTimeoutMillis: Long): DedicatedConnection =
+    new DedicatedConnection(factory, connectTimeoutMillis)
 }

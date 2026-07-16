@@ -133,7 +133,8 @@ class DedicatedPoolSpec extends munit.FunSuite {
     val factory: MultiplexedConnection.TransportFactory = (onFrame, onClosed) => {
       val t = new FakeTransport(onFrame, onClosed, replyWith(Nil)); transports += t; t
     }
-    val conn                                            = DedicatedConnection.establish(factory, Vector(Connection.hello()), 1000L)
+    val conn                                            = DedicatedConnection.create(factory, 1000L)
+    conn.establish(Vector(Connection.hello()))
     transports.head.autoWrite = false // hold the write so the command stays queued: the path the transport drops on teardown
 
     var healthyWhenFailed: Option[Boolean] = None
@@ -323,5 +324,33 @@ class DedicatedPoolSpec extends munit.FunSuite {
     assert(!waiter.isAlive, "the parked waiter must be woken, not sleep out the 10s acquireTimeout")
     assert(result.exists(_.failed.toOption.exists(_.isInstanceOf[NotConnected])), s"expected NotConnected, got $result")
     pool.releaseTransaction(held, reusable = false)
+  }
+
+  test("close aborts a dedicated connection still blocked in the connect (start) phase") {
+    val connecting                                      = new java.util.concurrent.atomic.AtomicReference[ConnectingTransport]()
+    val scheduler                                       = new ManualScheduler
+    val factory: MultiplexedConnection.TransportFactory = (_, onClosed) => {
+      val transport = new ConnectingTransport(onClosed)
+      connecting.set(transport)
+      transport
+    }
+    val gen                                             = MultiplexedConnection.Generation.initial
+    val pool                                            =
+      new DedicatedPool(factory, Vector(Connection.hello()), scheduler, () => true, () => Some(gen), _ == gen, DedicatedPoolConfig(), 1000L)
+
+    pool.use(blPop, _ => ())
+    val establishing = new Thread(() => scheduler.advance(Duration.Zero)) // blocks inside ConnectingTransport.start()
+    establishing.start()
+
+    val deadline = System.currentTimeMillis() + 2000
+    while (connecting.get() == null && System.currentTimeMillis() < deadline) Thread.sleep(1)
+    assert(connecting.get() != null, "the establish never started")
+    assert(connecting.get().reached.await(2, java.util.concurrent.TimeUnit.SECONDS), "the establish never reached the connect phase")
+
+    pool.close()
+    establishing.join(2000)
+
+    assert(!establishing.isAlive, "close must abort the establishing connection, not wait out the connect")
+    assert(connecting.get().wasClosed, "close must abort the establishing transport")
   }
 }

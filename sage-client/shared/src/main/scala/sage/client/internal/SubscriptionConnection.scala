@@ -6,10 +6,11 @@ import java.util.concurrent.locks.ReentrantLock
 
 import scala.collection.mutable
 import scala.concurrent.duration.*
+import scala.util.{Failure, Success, Try}
 import scala.util.control.NonFatal
 
 import sage.{Bytes, SageEvent, SageException}
-import sage.SageException.{ConnectionFailed, NotConnected}
+import sage.SageException.{ConnectionFailed, ConnectionLost, NotConnected}
 import sage.client.{BackoffConfig, WatchdogConfig}
 import sage.cluster.Node
 import sage.commands.{Command, Connection, Pubsub, Reply}
@@ -49,6 +50,8 @@ final private[client] class SubscriptionConnection(
   private val confirmed     = lock.newCondition()
   private var state: State  = State.Idle
   private var current: Conn = null
+  // connections still being opened; a set, since a reconnect and a fresh attach can be establishing at once
+  private val establishing  = mutable.Set.empty[Conn]
   private val channelSinks  = mutable.HashMap.empty[String, mutable.LinkedHashSet[Sink]]
   private val patternSinks  = mutable.HashMap.empty[String, mutable.LinkedHashSet[Sink]]
   private val shardSinks    = mutable.HashMap.empty[String, mutable.LinkedHashSet[Sink]]
@@ -256,16 +259,19 @@ final private[client] class SubscriptionConnection(
 
   private def establish(): Conn = {
     val conn = new Conn
-    try conn.start()
-    catch {
-      case e: SageException => throw e
-      case NonFatal(e)      =>
-        val failed = ConnectionFailed(s"could not open the subscription connection: $e")
-        failed.initCause(e)
-        throw failed
-    }
-    runBootstrap(conn)
-    conn
+    locked { establishing += conn; if (state == State.Closed) conn.close() }
+    try {
+      try conn.start()
+      catch {
+        case e: SageException => throw e
+        case NonFatal(e)      =>
+          val failed = ConnectionFailed(s"could not open the subscription connection: $e")
+          failed.initCause(e)
+          throw failed
+      }
+      runBootstrap(conn)
+      conn
+    } finally locked { val _ = establishing -= conn }
   }
 
   // per-conn waiter (two establishes can bootstrap concurrently and must not cross-complete); the finally clears it so a later PONG isn't misrouted
@@ -275,12 +281,13 @@ final private[client] class SubscriptionConnection(
         bootstrap,
         connectTimeoutMillis,
         (command, cb) => {
-          conn.bootstrapWaiter = frame => cb(Reply.decode(command, frame))
-          conn.send(command.encode)
+          conn.armBootstrap(result => cb(result.flatMap(frame => Reply.decode(command, frame))))
+          if (conn.isTerminated) { val _ = conn.completeBootstrap(Failure(ConnectionLost(mayHaveExecuted = false))) }
+          else conn.send(command.encode)
         },
         () => conn.close()
       )
-    finally conn.bootstrapWaiter = null
+    finally conn.clearBootstrap()
 
   private def scheduleReconnect(attempt: Int): Unit =
     scheduler.after(Backoff.jitteredMillis(backoff, attempt, scheduler).millis)(attemptReconnect(attempt))
@@ -338,9 +345,7 @@ final private[client] class SubscriptionConnection(
         }
       case reply                => // non-push reply: bootstrap HELLO, watchdog PONG, or an unexpected error
         lastReplyAtMillis = scheduler.nowMillis
-        val waiter = conn.bootstrapWaiter
-        if (waiter != null) waiter(reply)
-        else
+        if (!conn.completeBootstrap(Success(reply)))
           reply match {
             // an error (e.g. MOVED on SSUBSCRIBE) isn't a PONG: drop the connection so re-home/reconnect re-plans
             case _: Frame.SimpleError | _: Frame.BulkError => scheduler.after(Duration.Zero)(conn.close()) // off the reader thread: close() joins it
@@ -381,61 +386,55 @@ final private[client] class SubscriptionConnection(
     if (failure != null) throw failure
   }
 
+  // must hold `lock`: transition to Closed and return the connections to tear down (current + establishing)
+  private def markClosed(): Vector[Conn] = {
+    val conns = (Option(current) ++ establishing).toVector
+    establishing.clear()
+    state = State.Closed
+    stopWatchdog()
+    current = null
+    established.signalAll()
+    confirmed.signalAll()
+    conns
+  }
+
   // atomic empty-check + Closed transition, so a racing attach can't bind a sink to a connection about to close
   def closeIfEmpty(): Boolean = {
-    var conn: Conn = null
-    val closing    = locked {
+    var toClose: Vector[Conn] = Vector.empty
+    val closing               = locked {
       if (!isEmptyUnlocked) false
-      else {
-        conn = current
-        state = State.Closed
-        stopWatchdog()
-        current = null
-        established.signalAll()
-        confirmed.signalAll()
-        true
-      }
+      else { toClose = markClosed(); true }
     }
-    if (conn != null) conn.close()
+    toClose.foreach(_.close())
     closing
   }
 
   // close socket/watchdog but keep the sinks (unlike close), so a re-home re-attaches them
   def shutdown(): Unit = {
-    var conn: Conn = null
-    locked {
-      conn = current
-      state = State.Closed
-      stopWatchdog()
-      current = null
+    val toClose = locked {
+      val conns = markClosed()
       channelSinks.clear()
       patternSinks.clear()
       shardSinks.clear()
-      established.signalAll()
-      confirmed.signalAll()
+      conns
     }
-    if (conn != null) conn.close()
+    toClose.foreach(_.close())
   }
 
   def close(): Unit = {
-    var conn: Conn       = null
     var sinks: Set[Sink] = Set.empty
-    locked {
+    val toClose          = locked {
       sinks = (channelSinks.values.flatten ++ patternSinks.values.flatten ++ shardSinks.values.flatten).toSet
-      conn = current
-      state = State.Closed
-      stopWatchdog()
-      current = null
+      val conns = markClosed()
       channelSinks.clear()
       patternSinks.clear()
       shardSinks.clear()
-      established.signalAll()
-      confirmed.signalAll()
+      conns
     }
     // terminate before close: conn.close() joins the reader, which only exits Sink.offer once its sink is closed — closing first deadlocks.
     // In cluster mode the manager owns the sinks and terminates them before calling close(), so this set is already empty.
     sinks.foreach(_.terminate())
-    if (conn != null) conn.close()
+    toClose.foreach(_.close())
   }
 
   private def register(sink: Sink, names: Vector[String], kind: Kind): Vector[String] = {
@@ -489,16 +488,33 @@ final private[client] class SubscriptionConnection(
 
   final private class Conn {
 
-    private val transportRef                     = new AtomicReference[Transport]()
-    @volatile private var terminated             = false
-    @volatile var bootstrapWaiter: Frame => Unit = null
+    private val transportRef         = new AtomicReference[Transport]()
+    @volatile private var terminated = false
+    @volatile private var aborted    = false
+    private val bootstrapWaiter      = new AtomicReference[Try[Frame] => Unit]()
 
     def isTerminated: Boolean = terminated
 
     def start(): Unit = {
-      val transport = factory(frame => onFrame(this, frame), () => { terminated = true; onConnClosed(this) })
+      val transport = factory(frame => onFrame(this, frame), () => onTerminated())
       transportRef.set(transport)
-      transport.start()
+      if (aborted) transport.close()
+      else transport.start()
+    }
+
+    private def onTerminated(): Unit = {
+      terminated = true
+      val _ = completeBootstrap(Failure(ConnectionLost(mayHaveExecuted = false)))
+      onConnClosed(this)
+    }
+
+    def armBootstrap(waiter: Try[Frame] => Unit): Unit = bootstrapWaiter.set(waiter)
+    def clearBootstrap(): Unit                         = bootstrapWaiter.set(null)
+
+    def completeBootstrap(result: Try[Frame]): Boolean = {
+      val waiter = bootstrapWaiter.getAndSet(null)
+      if (waiter != null) { waiter(result); true }
+      else false
     }
 
     def send(payload: Bytes): Unit = {
@@ -507,6 +523,7 @@ final private[client] class SubscriptionConnection(
     }
 
     def close(): Unit = {
+      aborted = true
       val transport = transportRef.get()
       if (transport != null) transport.close()
     }
