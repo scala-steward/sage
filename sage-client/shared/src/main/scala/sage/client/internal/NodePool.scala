@@ -71,41 +71,50 @@ final private[client] class NodePool(
     }
     if (existing != null) existing
     else if (waitOn != null) waitOn.get()
-    else
-      try {
-        val nc    = NodeClient.connect(
-          nodeFactory(node),
-          scheduler,
-          bootstrap,
-          reconnect,
-          watchdog,
-          connectTimeout,
-          closeTimeout,
-          dedicatedPool,
-          cacheMaxBytes,
-          Some(node),
-          events,
-          dedicatedBootstrap
-        )
-        val stale = locked { pendingEstablish.remove(node); if (closed) true else { established.put(node, nc); false } }
-        if (stale) { nc.close(); throw NotConnected() }
-        mine.succeed(nc)
-        nc
-      } catch {
-        case error: Throwable =>
-          locked(pendingEstablish.remove(node))
-          mine.fail(error)
-          throw error
+    else {
+      val nc      =
+        try
+          NodeClient.connect(
+            nodeFactory(node),
+            scheduler,
+            bootstrap,
+            reconnect,
+            watchdog,
+            connectTimeout,
+            closeTimeout,
+            dedicatedPool,
+            cacheMaxBytes,
+            Some(node),
+            events,
+            dedicatedBootstrap
+          )
+        catch {
+          case error: Throwable =>
+            locked(if (pendingEstablish.get(node).exists(_ eq mine)) { val _ = pendingEstablish.remove(node) })
+            mine.fail(error)
+            throw error
+        }
+      // publish only if our token is still current: a retain, close, or newer attempt supersedes us, and the new client is discarded not leaked
+      val publish = locked {
+        val current = pendingEstablish.get(node).exists(_ eq mine)
+        if (current) { val _ = pendingEstablish.remove(node) }
+        if (current && !closed) { established.put(node, nc); true }
+        else false
       }
+      if (publish) { mine.succeed(nc); nc }
+      else { nc.close(); mine.fail(NotConnected()); throw NotConnected() }
+    }
   }
 
-  // drops and closes every bundle whose node `keep` rejects, so a vanished node's reconnect loop cannot leak; closes are offloaded
+  // drops/closes bundles `keep` rejects and invalidates in-flight establishments for rejected nodes, so neither leaks; closes are offloaded
   def retain(keep: Node => Boolean): Unit = {
-    val gone = locked {
-      val absent = established.keysIterator.filterNot(keep).toVector
-      absent.flatMap(node => established.remove(node))
+    val (gone, rejected) = locked {
+      val absent          = established.keysIterator.filterNot(keep).toVector.flatMap(node => established.remove(node))
+      val rejectedPending = pendingEstablish.keysIterator.filterNot(keep).toVector.flatMap(node => pendingEstablish.remove(node))
+      (absent, rejectedPending)
     }
     gone.foreach(nc => scheduler.after(Duration.Zero)(nc.close()))
+    rejected.foreach(_.fail(NotConnected()))
   }
 
   def close(): Unit = {
