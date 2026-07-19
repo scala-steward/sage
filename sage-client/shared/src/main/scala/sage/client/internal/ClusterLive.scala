@@ -26,8 +26,9 @@ import sage.protocol.Frame
   * submission order; positions a stale topology can't resolve fall back to per-command [[dispatch]]. A Transaction leases one Dedicated
   * Connection, pinned lazily to the slot of its first key, and rejects any key on another slot with [[CrossSlot]].
   *
-  * Routing and redirect-following run on offloaded virtual threads (never the reply thread), since establishing a node and refreshing the
-  * topology both block. A submit's reply callback re-offloads before any blocking continuation.
+  * Dispatch to an already-established node runs inline on the caller: the registry lookup and the submit never block, even mid-reconnect,
+  * where the submit fails fast. Only the paths that may establish a connection or refresh the topology hop to an offloaded virtual thread,
+  * and a submit's reply callback re-offloads before any blocking continuation (never on the reply thread).
   */
 final private[client] class ClusterLive(
   nodeFactory: Node => MultiplexedConnection.TransportFactory,
@@ -114,11 +115,9 @@ final private[client] class ClusterLive(
   def run[A](command: Command[A]): CIO[A] = {
     def body(lease: DedicatedPool.Lease): CIO[A] =
       CIO.async[A] { complete =>
-        val span = Events.startSpan(events, command)
-        offload {
-          val tracked = Events.trackCommand(events, command, complete, span)
-          Client.completing(tracked)(dispatch(command, cluster.maxRedirects, tracked, lease = lease))
-        }
+        val span    = Events.startSpan(events, command)
+        val tracked = Events.trackCommand(events, command, complete, span)
+        Client.completing(tracked)(dispatch(command, cluster.maxRedirects, tracked, lease = lease))
       }
     if (!command.isBlocking) body(null)
     // acquire a fresh lease per execution: a lease is single-shot (cancel is terminal), so a captured one would make a re-run of this value hang
@@ -131,11 +130,9 @@ final private[client] class ClusterLive(
     if (!Client.cacheable(command)) CIO.fail(Client.notCacheable(command))
     else
       CIO.async[A] { complete =>
-        val span = Events.startSpan(events, command)
-        offload {
-          val tracked = Events.trackCommand(events, command, complete, span)
-          Client.completing(tracked)(dispatch(command, cluster.maxRedirects, tracked, allowReplica = false))
-        }
+        val span    = Events.startSpan(events, command)
+        val tracked = Events.trackCommand(events, command, complete, span)
+        Client.completing(tracked)(dispatch(command, cluster.maxRedirects, tracked, allowReplica = false))
       }
 
   // SCAN cursors are node-local, so a full SCAN must sweep every slot-owning master; a reshard mid-scan can still miss or duplicate keys
@@ -155,11 +152,9 @@ final private[client] class ClusterLive(
       case Some(node) =>
         def body(lease: DedicatedPool.Lease): CIO[A] =
           CIO.async[A] { complete =>
-            val span = Events.startSpan(events, command)
-            offload {
-              val tracked = Events.trackCommand(events, command, complete, span)
-              Client.completing(tracked)(sendTo(node, command, asking = false, redirectsLeft = 0, tracked, lease))
-            }
+            val span    = Events.startSpan(events, command)
+            val tracked = Events.trackCommand(events, command, complete, span)
+            Client.completing(tracked)(sendTo(node, command, asking = false, redirectsLeft = 0, tracked, lease))
           }
         // mirror run: a blocking command needs a cancelable lease so an interrupt releases the slot instead of leaking it
         if (!command.isBlocking) body(null)
@@ -199,11 +194,19 @@ final private[client] class ClusterLive(
     else {
       val topology = topologyRef.get()
       if (command.allMasters)
-        command.broadcast match {
-          case BroadcastReduce.First      => sendToAllMasters(topology, command, complete)
-          case BroadcastReduce.Concat     => broadcastCombine(topology, command, concatFrames, complete)
-          case BroadcastReduce.Fold(fold) => broadcastCombine(topology, command, _.reduce(fold), complete)
-        }
+        if (slotOwningMasters(topology).forall(node => masterPool.existing(node) != null))
+          broadcast(topology, command, complete, masterPool.existing)
+        else
+          offload {
+            broadcast(
+              topology,
+              command,
+              complete,
+              node =>
+                try getOrEstablish(node)
+                catch { case NonFatal(_) => null }
+            )
+          }
       else
         topology.route(command) match {
           case Route.ToNode(node, slot) =>
@@ -214,7 +217,7 @@ final private[client] class ClusterLive(
             if (allowReplica && readFrom != ReadFrom.Master && ReadRouting.replicaEligible(command))
               sendKeylessRead(topology, command, redirectsLeft, complete)
             else sendToAny(topology, command, redirectsLeft, complete, lease)
-          case Route.Unowned(_)         => onUnowned(command, redirectsLeft, complete, lease)
+          case Route.Unowned(_)         => offload(onUnowned(command, redirectsLeft, complete, lease))
           case Route.CrossSlot(slots)   => complete(Failure(crossSlot(command.name, slots)))
           case Route.Malformed          =>
             complete(Failure(malformedKeys(command.name)))
@@ -246,22 +249,40 @@ final private[client] class ClusterLive(
   private def tryReadCandidates[A](command: Command[A], candidates: Vector[Node], master: Node, redirectsLeft: Int, complete: Try[A] => Unit): Unit =
     candidates match {
       case node +: rest =>
-        val nc =
-          try if (node == master) getOrEstablish(node) else replicaPool.getOrEstablish(node)
-          catch { case NonFatal(_) => null }
-        if (nc == null || !nc.isLive) tryReadCandidates(command, rest, master, redirectsLeft, complete)
+        val pool     = if (node == master) masterPool else replicaPool
+        val existing = pool.existing(node)
+        if (existing != null)
+          if (existing.isLive) submitRead(existing, node, command, rest, master, redirectsLeft, complete)
+          else tryReadCandidates(command, rest, master, redirectsLeft, complete)
         else
-          nc.submit[A](
-            command,
-            asking = false,
-            {
-              case Success(value) => Events.attributeNode(complete, node); complete(Success(value))
-              case Failure(error) => offload(onReadFailure(node, command, error, rest, master, redirectsLeft, complete))
-            }
-          )
+          offload {
+            val nc =
+              try pool.getOrEstablish(node)
+              catch { case NonFatal(_) => null }
+            if (nc == null || !nc.isLive) tryReadCandidates(command, rest, master, redirectsLeft, complete)
+            else submitRead(nc, node, command, rest, master, redirectsLeft, complete)
+          }
       // strict Replica, all candidates unreachable: refresh so the next read sees the new roster
       case _            => triggerRefresh(); complete(Failure(NotConnected()))
     }
+
+  private def submitRead[A](
+    nc: NodeClient,
+    node: Node,
+    command: Command[A],
+    rest: Vector[Node],
+    master: Node,
+    redirectsLeft: Int,
+    complete: Try[A] => Unit
+  ): Unit =
+    nc.submit[A](
+      command,
+      asking = false,
+      {
+        case Success(value) => Events.attributeNode(complete, node); complete(Success(value))
+        case Failure(error) => offload(onReadFailure(node, command, error, rest, master, redirectsLeft, complete))
+      }
+    )
 
   private def onReadFailure[A](
     node: Node,
@@ -289,9 +310,16 @@ final private[client] class ClusterLive(
       case Fault.Fatal                      => Events.attributeNode(complete, node); complete(Failure(error))
     }
 
+  private def broadcast[A](topology: ClusterTopology, command: Command[A], complete: Try[A] => Unit, resolve: Node => NodeClient): Unit =
+    command.broadcast match {
+      case BroadcastReduce.First      => sendToAllMasters(topology, command, complete, resolve)
+      case BroadcastReduce.Concat     => broadcastCombine(topology, command, concatFrames, complete, resolve)
+      case BroadcastReduce.Fold(fold) => broadcastCombine(topology, command, _.reduce(fold), complete, resolve)
+    }
+
   // a broadcast command (SCRIPT LOAD, FUNCTION LOAD, …) runs on every slot-owning master, since a cluster replicates no script/function
   // cache; any node failing fails the command
-  private def sendToAllMasters[A](topology: ClusterTopology, command: Command[A], complete: Try[A] => Unit): Unit = {
+  private def sendToAllMasters[A](topology: ClusterTopology, command: Command[A], complete: Try[A] => Unit, resolve: Node => NodeClient): Unit = {
     val masters = slotOwningMasters(topology)
     if (masters.isEmpty) sendToAny(topology, command, cluster.maxRedirects, complete)
     else {
@@ -307,9 +335,7 @@ final private[client] class ClusterLive(
           complete(Option(firstError.get()).map(Failure(_)).getOrElse(firstValue.get()))
       }
       masters.foreach { node =>
-        val nc =
-          try getOrEstablish(node)
-          catch { case NonFatal(_) => null }
+        val nc = resolve(node)
         if (nc == null) settle(Failure(NotConnected()))
         else nc.submit[A](command, asking = false, settle)
       }
@@ -323,7 +349,8 @@ final private[client] class ClusterLive(
     topology: ClusterTopology,
     command: Command[A],
     combine: Vector[Frame] => Frame,
-    complete: Try[A] => Unit
+    complete: Try[A] => Unit,
+    resolve: Node => NodeClient
   ): Unit = {
     val masters = slotOwningMasters(topology)
     if (masters.isEmpty) sendToAny(topology, command, cluster.maxRedirects, complete)
@@ -344,9 +371,7 @@ final private[client] class ClusterLive(
           }
       }
       masters.iterator.zipWithIndex.foreach { case (node, index) =>
-        val nc =
-          try getOrEstablish(node)
-          catch { case NonFatal(_) => null }
+        val nc = resolve(node)
         if (nc == null) settle(index, Failure(NotConnected()))
         else nc.submit[Frame](raw, asking = false, result => settle(index, result))
       }
@@ -389,21 +414,36 @@ final private[client] class ClusterLive(
     complete: Try[A] => Unit,
     lease: DedicatedPool.Lease
   ): Unit = {
-    val nc =
-      try getOrEstablish(node)
-      catch { case NonFatal(_) => null }
-    if (nc == null) onUnreachable(command, redirectsLeft, complete, lease)
+    val existing = masterPool.existing(node)
+    if (existing != null) submitTo(existing, node, command, asking, redirectsLeft, complete, lease)
     else
-      nc.submit[A](
-        command,
-        asking,
-        {
-          case Success(value) => Events.attributeNode(complete, node); complete(Success(value))
-          case Failure(error) => offload(onFailure(node, command, error, redirectsLeft, complete, lease))
-        },
-        lease
-      )
+      offload {
+        val nc =
+          try getOrEstablish(node)
+          catch { case NonFatal(_) => null }
+        if (nc == null) onUnreachable(command, redirectsLeft, complete, lease)
+        else submitTo(nc, node, command, asking, redirectsLeft, complete, lease)
+      }
   }
+
+  private def submitTo[A](
+    nc: NodeClient,
+    node: Node,
+    command: Command[A],
+    asking: Boolean,
+    redirectsLeft: Int,
+    complete: Try[A] => Unit,
+    lease: DedicatedPool.Lease
+  ): Unit =
+    nc.submit[A](
+      command,
+      asking,
+      {
+        case Success(value) => Events.attributeNode(complete, node); complete(Success(value))
+        case Failure(error) => offload(onFailure(node, command, error, redirectsLeft, complete, lease))
+      },
+      lease
+    )
 
   private def onFailure[A](
     node: Node,
@@ -500,7 +540,7 @@ final private[client] class ClusterLive(
       )
     else
       CIO.async { complete =>
-        offload(runPipeline(p, complete, Events.deferSpans(events, p.commands)))
+        runPipeline(p, complete, Events.deferSpans(events, p.commands))
       }
 
   // a position a stale topology can't resolve falls back to per-command dispatch; the collector completes once every position lands terminally
@@ -531,7 +571,7 @@ final private[client] class ClusterLive(
     }
     // all-or-nothing: reroutes honor the same choice so a slot is never split across master and replica
     val useReplica                = readFrom != ReadFrom.Master && p.commands.forall(ReadRouting.replicaEligible)
-    def reroute(index: Int): Unit = offload(dispatch(p.commands(index), cluster.maxRedirects, emits(index), allowReplica = useReplica))
+    def reroute(index: Int): Unit = dispatch(p.commands(index), cluster.maxRedirects, emits(index), allowReplica = useReplica)
 
     plan.rejected.foreach {
       case (index, Rejected.CrossSlot(slots)) => emits(index)(Failure(crossSlot(p.commands(index).name, slots)))
@@ -546,15 +586,35 @@ final private[client] class ClusterLive(
     }
   }
 
-  // first live read candidate for a shard under the policy, with the node it landed on; (master, null) when none
-  private def readConn(master: Node): (Node, NodeClient) = {
+  // the read candidates for `master`'s shard under the policy, advancing its round-robin cursor once
+  private def readCandidates(master: Node): Vector[Node] = {
     val replicas = topologyRef.get().shards.collectFirst { case s if s.master == master => s.replicas }.getOrElse(Vector.empty)
     val cursor   = replicaCursors.computeIfAbsent(master, _ => new java.util.concurrent.atomic.AtomicInteger())
-    val it       = ReadRouting.candidates(readFrom, master, replicas, cursor.getAndIncrement()).iterator
+    ReadRouting.candidates(readFrom, master, replicas, cursor.getAndIncrement())
+  }
+
+  // lock-free walk: the first live established candidate, Some((master, null)) when all are established but none live, and None when an
+  // unestablished candidate is met first — only then must the caller offload to establish
+  private def liveEstablished(candidates: Vector[Node], master: Node): Option[(Node, NodeClient)] = {
+    val it = candidates.iterator
     while (it.hasNext) {
       val node = it.next()
+      val pool = if (node == master) masterPool else replicaPool
+      val nc   = pool.existing(node)
+      if (nc == null) return None
+      if (nc.isLive) return Some((node, nc))
+    }
+    Some((master, null))
+  }
+
+  // first live read candidate, establishing as needed, with the node it landed on; (master, null) when none
+  private def establishRead(candidates: Vector[Node], master: Node): (Node, NodeClient) = {
+    val it = candidates.iterator
+    while (it.hasNext) {
+      val node = it.next()
+      val pool = if (node == master) masterPool else replicaPool
       val nc   =
-        try if (node == master) getOrEstablish(node) else replicaPool.getOrEstablish(node)
+        try pool.getOrEstablish(node)
         catch { case NonFatal(_) => null }
       if (nc != null && nc.isLive) return (node, nc)
     }
@@ -568,16 +628,39 @@ final private[client] class ClusterLive(
     emits: Vector[Try[Any] => Unit],
     reroute: Int => Unit,
     useReplica: Boolean
-  ): Unit = {
-    // the node the batch lands on (a replica when useReplica), so completions attribute the serving node
-    val (target, nc)                               =
-      if (useReplica) readConn(node)
+  ): Unit =
+    // the batch attributes to the node it lands on (a replica when useReplica)
+    if (useReplica) {
+      val candidates = readCandidates(node)
+      liveEstablished(candidates, node) match {
+        case Some((target, nc)) => submitBatch(target, nc, indices, p, emits, reroute, useReplica)
+        case None               =>
+          offload {
+            val (target, nc) = establishRead(candidates, node)
+            submitBatch(target, nc, indices, p, emits, reroute, useReplica)
+          }
+      }
+    } else {
+      val existing = masterPool.existing(node)
+      if (existing != null) submitBatch(node, existing, indices, p, emits, reroute, useReplica)
       else
-        (
-          node,
-          try getOrEstablish(node)
-          catch { case NonFatal(_) => null }
-        )
+        offload {
+          val nc =
+            try getOrEstablish(node)
+            catch { case NonFatal(_) => null }
+          submitBatch(node, nc, indices, p, emits, reroute, useReplica)
+        }
+    }
+
+  private def submitBatch[Out, R](
+    target: Node,
+    nc: NodeClient,
+    indices: Vector[Int],
+    p: Pipeline[Out, R],
+    emits: Vector[Try[Any] => Unit],
+    reroute: Int => Unit,
+    useReplica: Boolean
+  ): Unit = {
     def settle(index: Int, result: Try[Any]): Unit = { Events.attributeNode(emits(index), target); emits(index)(result) }
     val callbacks: Vector[Try[Any] => Unit]        = indices.map { index => (result: Try[Any]) =>
       result match {

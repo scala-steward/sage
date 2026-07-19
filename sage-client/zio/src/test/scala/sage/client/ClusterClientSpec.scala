@@ -8,7 +8,7 @@ import kyo.compat.*
 
 import sage.Bytes
 import sage.SageException.{ConnectionLost, CrossSlot, DecodeError, NotConnected, ServerError}
-import sage.client.internal.{ClusterLive, FakeTransport, MultiplexedConnection, Scheduler}
+import sage.client.internal.{ClusterLive, CountingScheduler, FakeTransport, MultiplexedConnection, Scheduler}
 import sage.cluster.{Node, Slot}
 import sage.commands.{BroadcastReduce, Command, Connection, Keys, Scripting, Server, Strings}
 import sage.protocol.Frame
@@ -51,7 +51,8 @@ class ClusterClientSpec extends munit.FunSuite {
     seeds: Vector[Node],
     unreachable: Set[Node] = Set.empty,
     readFrom: ReadFrom = ReadFrom.Master,
-    connectGate: (Node, Int) => Unit = (_, _) => () // blocks a node's nth transport creation, to park an establish mid-flight
+    connectGate: (Node, Int) => Unit = (_, _) => (), // blocks a node's nth transport creation, to park an establish mid-flight
+    scheduler: Scheduler = Scheduler.real
   ) {
 
     // accumulate every transport per node (a node has both a Multiplexed and, once a transaction pins, a Dedicated connection) so a refresh
@@ -83,7 +84,7 @@ class ClusterClientSpec extends munit.FunSuite {
     val live: ClusterLive =
       new ClusterLive(
         factory,
-        Scheduler.real,
+        scheduler,
         Vector(Connection.hello(None)),
         BackoffConfig(),
         WatchdogConfig(enabled = false),
@@ -138,6 +139,72 @@ class ClusterClientSpec extends munit.FunSuite {
       assertEquals(result, Some(owner.host))
       assert(fixture.written(owner).exists(_.contains("GET")), "owner did not receive GET")
       assert(!fixture.written(other).exists(_.contains("GET")), "non-owner received GET")
+    }
+  }
+
+  test("a command to an established node dispatches inline, with no zero-delay scheduler hop") {
+    val counting  = new CountingScheduler
+    val behaviour =
+      (node: Node, text: String) => if (text.contains("CLUSTER")) Seq(wholeClusterOn(nodeA)) else Seq(Frame.BulkString(Bytes.utf8(node.host)))
+    val fixture   = new Fixture(behaviour, Vector(nodeA), scheduler = counting)
+
+    val before = counting.zeroDelays.get()
+    fixture.live.run(Strings.get[String, String]("foo")).unsafeRun.map { result =>
+      assertEquals(result, Some(nodeA.host))
+      assertEquals(counting.zeroDelays.get(), before, "an established-node dispatch must not offload")
+    }
+  }
+
+  test("a pipeline to an established node dispatches inline, with no zero-delay scheduler hop") {
+    val counting  = new CountingScheduler
+    val behaviour = (_: Node, text: String) =>
+      if (text.contains("CLUSTER")) Seq(wholeClusterOn(nodeA))
+      else Seq(Frame.BulkString(Bytes.utf8("v1")), Frame.BulkString(Bytes.utf8("v2")))
+    val fixture   = new Fixture(behaviour, Vector(nodeA), scheduler = counting)
+
+    val before = counting.zeroDelays.get()
+    fixture.live.pipeline((Strings.get[String, String]("{x}1"), Strings.get[String, String]("{x}2"))).unsafeRun.map { result =>
+      assertEquals(result, (Some("v1"), Some("v2")))
+      assertEquals(counting.zeroDelays.get(), before, "an established-node batch must not offload")
+    }
+  }
+
+  test("a broadcast to established masters dispatches inline, with no zero-delay scheduler hop") {
+    val counting  = new CountingScheduler
+    val mid       = Slot.Count / 2
+    val behaviour = (node: Node, text: String) =>
+      if (text.contains("CLUSTER")) Seq(slotsFrame((nodeA, 0, mid - 1), (nodeB, mid, Slot.Count - 1)))
+      else if (text.contains("DBSIZE")) Seq(Frame.Integer(if (node == nodeA) 2L else 3L))
+      else Seq(Frame.Null)
+    val fixture   = new Fixture(behaviour, Vector(nodeA), scheduler = counting)
+
+    fixture.live.run(Server.dbSize).unsafeRun.flatMap { _ =>
+      val before = counting.zeroDelays.get()
+      fixture.live.run(Server.dbSize).unsafeRun.map { total =>
+        assertEquals(total, 5L)
+        assertEquals(counting.zeroDelays.get(), before, "a broadcast to established masters must not offload")
+      }
+    }
+  }
+
+  test("a warmed read-only pipeline under ReadFrom.Replica dispatches inline, with no zero-delay scheduler hop") {
+    val counting  = new CountingScheduler
+    val nodeR     = Node("r", 6379)
+    def slots     =
+      Frame.Array(Vector(Frame.Array(Vector(Frame.Integer(0L), Frame.Integer((Slot.Count - 1).toLong), nodeFrame(nodeA), nodeFrame(nodeR)))))
+    val behaviour = (_: Node, text: String) =>
+      if (text.contains("CLUSTER")) Seq(slots)
+      else if (text.contains("READONLY")) Seq(Frame.SimpleString("OK"))
+      else Seq(Frame.BulkString(Bytes.utf8("v1")), Frame.BulkString(Bytes.utf8("v2")))
+    val fixture   = new Fixture(behaviour, Vector(nodeA), readFrom = ReadFrom.Replica, scheduler = counting)
+
+    val pipe = fixture.live.pipeline((Strings.get[String, String]("{x}1"), Strings.get[String, String]("{x}2")))
+    pipe.unsafeRun.flatMap { _ =>
+      val before = counting.zeroDelays.get()
+      pipe.unsafeRun.map { result =>
+        assertEquals(result, (Some("v1"), Some("v2")))
+        assertEquals(counting.zeroDelays.get(), before, "a warmed replica pipeline must not offload")
+      }
     }
   }
 
