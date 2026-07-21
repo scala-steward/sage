@@ -4,7 +4,7 @@ layout: home
 hero:
   name: "Sage"
   text: "A Redis & Valkey client for Scala 3"
-  tagline: One client for any effect system, built on a from-scratch native Redis protocol implementation.
+  tagline: One client for any Scala stack, built on a from-scratch native Redis protocol implementation.
   image:
     light: /sage.svg
     dark: /sage-dark.svg
@@ -18,7 +18,7 @@ hero:
       link: https://github.com/ghostdogpr/sage
 
 features:
-  - title: Use any effect system
+  - title: Use any Scala stack
     details: First-class ZIO, Cats Effect, Kyo, Ox, and Pekko artifacts, each with its ecosystem's native types and no wrapper visible.
   - title: Fast, native Redis protocol
     details: RESP3, commands, and codecs implemented directly in Scala 3, with no Java client wrapped underneath and fast by design.

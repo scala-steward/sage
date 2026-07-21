@@ -12,7 +12,7 @@ In practice sage matches or beats the established Scala clients on concurrent wo
 
 ## Which backend artifact should I use?
 
-One per effect system, all sharing the same runtime:
+One per Scala stack, all sharing the same runtime:
 
 - ZIO: `sage-client-zio`
 - Cats Effect: `sage-client-ce`

@@ -6,7 +6,7 @@ That core is paired with a runtime written once and cross-published for [Ox](htt
 
 ## Installation
 
-Add the artifact for your effect system. The core is pulled in transitively, so you depend on one module only.
+Add the artifact for your Scala stack. The core is pulled in transitively, so you depend on one module only.
 
 ::: code-group
 
@@ -32,7 +32,7 @@ Add the artifact for your effect system. The core is pulled in transitively, so 
 
 :::
 
-Two imports cover everything: `import sage.*` for the command vocabulary and connection config, and `import sage.backend.*` for the client. That second import is the same regardless of effect system; only the dependency you choose differs.
+Two imports cover everything: `import sage.*` for the command vocabulary and connection config, and `import sage.backend.*` for the client. That second import is the same regardless of Scala stack; only the dependency you choose differs.
 
 ## Your first connection
 
