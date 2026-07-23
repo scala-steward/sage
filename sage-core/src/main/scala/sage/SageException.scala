@@ -99,4 +99,12 @@ object SageException {
     * an invalidation push (only by TTL), so it is rejected rather than silently allowed to go stale.
     */
   final case class NotCacheable(message: String) extends SageException(message)
+
+  /**
+    * An argument the API can never accept: an invalid configuration or rate-limit policy, a blocking command in a pipeline or transaction,
+    * or a command a cluster client cannot serve as routed (an all-masters command in a cluster pipeline, a cluster-wide result in a
+    * single-node transaction, declared key positions falling outside a hand-built command's arguments). A programming error to fix at the
+    * call site, not a runtime outcome to retry.
+    */
+  final case class InvalidArgument(message: String) extends SageException(message)
 }

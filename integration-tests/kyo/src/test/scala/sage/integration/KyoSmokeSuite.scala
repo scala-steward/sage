@@ -1,5 +1,9 @@
 package sage.integration
 
+import java.util.concurrent.TimeUnit
+
+import scala.concurrent.duration.FiniteDuration
+
 import kyo.*
 
 import sage.*
@@ -152,6 +156,25 @@ class KyoSmokeSuite extends ServerSuite(Images.redis) {
           _       <- Kyo.foreachDiscard(1 to 3)(i => client.xAdd("xtail", XAddId.Explicit(StreamId(i.toLong, 0L)))(("f", s"v$i")))
           entries <- client.xTail[String, String]("xtail").take(3).run
         } yield assertEquals(entries.toList.map(_.fields.head._2), List("v1", "v2", "v3"))
+
+      import AllowUnsafe.embrace.danger
+      KyoApp.Unsafe.runAndBlock(15L.seconds)(program).getOrThrow
+    }
+  }
+
+  test("client.rateLimiter admits up to capacity then denies") {
+    withContainers { server =>
+      val program: Unit < (Scope & Abort[Throwable] & Async) =
+        for {
+          client <- SageClient.scoped(configOf(server))
+          rl      = client.rateLimiter[String](RateLimit(capacity = 2, refillTokens = 1, refillPeriod = FiniteDuration(1L, TimeUnit.HOURS)))
+          first  <- rl.tryAcquire("smoke")
+          second <- rl.tryAcquire("smoke")
+          denied <- rl.tryAcquire("smoke")
+        } yield {
+          assert(first.isAllowed && second.isAllowed, "the first two are admitted")
+          assert(!denied.isAllowed, "the third is denied once the bucket empties")
+        }
 
       import AllowUnsafe.embrace.danger
       KyoApp.Unsafe.runAndBlock(15L.seconds)(program).getOrThrow
